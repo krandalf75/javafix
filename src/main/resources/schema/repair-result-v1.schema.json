@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://javafix.github.io/schemas/repair-result-v1.schema.json",
+  "title": "JavaFix repair result v1",
+  "type": "object",
+  "required": ["schemaVersion", "status", "repairs", "changes"],
+  "properties": {
+    "schemaVersion": { "const": "1" },
+    "status": { "enum": ["preview", "applied"] },
+    "repairs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id"],
+        "properties": { "id": { "type": "string", "minLength": 1 } },
+        "additionalProperties": true
+      }
+    },
+    "changes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["path", "beforeHash", "afterHash", "preview"],
+        "properties": {
+          "path": { "type": "string" },
+          "beforeHash": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+          "afterHash": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+          "preview": { "enum": ["not-written", "written"] },
+          "content": { "type": "string" }
+        },
+        "additionalProperties": true
+      }
+    },
+    "postAnalysis": { "$ref": "analysis-v1.schema.json" },
+    "diagnosticChanges": {
+      "type": "object",
+      "required": ["resolved", "persistent", "new", "complete"],
+      "properties": {
+        "resolved": { "type": "array", "items": { "$ref": "#/$defs/findingSummary" } },
+        "persistent": { "type": "array", "items": { "$ref": "#/$defs/findingSummary" } },
+        "new": { "type": "array", "items": { "$ref": "#/$defs/findingSummary" } },
+        "complete": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    }
+  },
+  "$defs": {
+    "findingSummary": {
+      "type": "object",
+      "required": ["path", "source", "severity", "message"],
+      "properties": {
+        "path": { "type": "string" },
+        "source": { "type": "string" },
+        "code": {},
+        "ruleId": {},
+        "severity": { "type": "string" },
+        "message": { "type": "string" },
+        "range": { "type": "object" }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": true
+}

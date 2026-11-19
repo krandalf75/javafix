@@ -1,0 +1,13 @@
+arguments=--init-script /private/var/folders/tx/4j5_b0rs5416t1ptw8x_bhjw0000gn/T/javafix-jdtls-config-6656305151665499815/configuration/org.eclipse.osgi/57/0/.cp/gradle/init/init.gradle
+auto.sync=true
+build.scans.enabled=false
+connection.gradle.distribution=GRADLE_DISTRIBUTION(VERSION(8.9))
+connection.project.dir=
+eclipse.preferences.version=1
+gradle.user.home=
+java.home=/private/var/folders/tx/4j5_b0rs5416t1ptw8x_bhjw0000gn/T/opencode/jdk-25.0.5.1+2/Contents/Home
+jvm.arguments=
+offline.mode=false
+override.workspace.settings=true
+show.console.view=true
+show.executions.view=true

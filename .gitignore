@@ -1,0 +1,7 @@
+target/
+dependency-reduced-pom.xml
+.DS_Store
+.idea/
+.gradle/
+acme/**/target/
+acme/**/bin/

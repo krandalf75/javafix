@@ -1,0 +1,31 @@
+{
+  "jdtlsVersion": "1.61.0",
+  "build": "202609031315",
+  "source": "Java",
+  "observedDiagnostics": [
+    {
+      "code": "268435844",
+      "iProblem": "UnusedImport",
+      "label": "Import no utilizado",
+      "fixture": "acme/maven/src/main/java/com/acme/BadCode.java"
+    },
+    {
+      "code": "536871799",
+      "iProblem": "UnclosedCloseable",
+      "label": "Recurso AutoCloseable sin cerrar",
+      "fixture": "acme/maven/src/main/java/com/acme/BadCode.java"
+    },
+    {
+      "code": "536870973",
+      "iProblem": "LocalVariableIsNeverUsed",
+      "label": "Variable local no utilizada",
+      "fixture": "acme/maven/src/main/java/com/acme/BadCode.java"
+    },
+    {
+      "code": "1610612967",
+      "iProblem": "ParsingErrorInsertTokenAfter",
+      "label": "Error sintáctico con inserción de token",
+      "fixture": "acme/maven/src/main/java/com/acme/BrokenSyntax.java"
+    }
+  ]
+}
