@@ -20,10 +20,37 @@
             "required": ["id"],
             "properties": {
               "id": { "type": "string", "minLength": 1 },
-              "parameters": { "type": "object", "maxProperties": 0 }
+              "parameters": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "constantName": { "type": "string", "minLength": 1 },
+                  "methodName": { "type": "string", "minLength": 1 },
+                  "selection": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["start", "end"],
+                    "properties": {
+                      "start": { "$ref": "#/$defs/position" },
+                      "end": { "$ref": "#/$defs/position" }
+                    }
+                  }
+                }
+              }
             }
           }
         ]
+      }
+    }
+  },
+  "$defs": {
+    "position": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["line", "character"],
+      "properties": {
+        "line": { "type": "integer", "minimum": 0 },
+        "character": { "type": "integer", "minimum": 0 }
       }
     }
   }

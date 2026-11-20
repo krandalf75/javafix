@@ -44,6 +44,8 @@ class PmdRuleProviderTest {
         assertTrue(rules.contains("PMD/CloseResource"), diagnostics.toString());
         assertTrue(diagnostics.stream().allMatch(node -> "PMD".equals(node.path("source").asText())));
         assertTrue(diagnostics.stream().allMatch(node -> node.path("ruleId").asText().startsWith("PMD/")));
+        assertTrue(diagnostics.stream().allMatch(node -> !node.path("code").isMissingNode()
+            && !node.path("code").asText().startsWith("PMD/")));
     }
 
     @Test
@@ -72,6 +74,31 @@ class PmdRuleProviderTest {
             .analyze(List.of(source)).get(source.toRealPath());
 
         assertEquals(List.of(), diagnostics);
+    }
+
+    @Test
+    void identifiesManualFinallyCloseAsUseTryWithResourcesCandidate() throws Exception {
+        Path source = Files.writeString(temporaryDirectory.resolve("ManualFinallyClose.java"), """
+            import java.io.FileInputStream;
+            import java.io.IOException;
+
+            class ManualFinallyClose {
+                int read(String path) throws IOException {
+                    FileInputStream stream = new FileInputStream(path);
+                    try {
+                        return stream.read();
+                    } finally {
+                        stream.close();
+                    }
+                }
+            }
+            """);
+
+        List<ObjectNode> diagnostics = new PmdRuleProvider()
+            .analyze(List.of(source)).get(source.toRealPath());
+
+        assertTrue(diagnostics.stream().anyMatch(node ->
+            "PMD/UseTryWithResources".equals(node.path("ruleId").asText())), diagnostics.toString());
     }
 
     @Test

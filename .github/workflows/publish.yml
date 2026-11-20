@@ -6,7 +6,7 @@ on:
       - 'v*'
 
 permissions:
-  contents: read
+  contents: write
   packages: write
 
 jobs:
@@ -36,3 +36,26 @@ jobs:
         run: mvn --batch-mode --no-transfer-progress clean deploy
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Prepare skill installer release assets
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          mkdir -p dist
+          cp "target/javafix-${version}.jar" "dist/javafix-${version}.jar"
+          cp "target/javafix-${version}.jar" dist/javafix.jar
+          tar -czf dist/javafix-skill.tar.gz -C .opencode/skills javafix
+          (
+            cd dist
+            sha256sum "javafix-${version}.jar" javafix.jar javafix-skill.tar.gz > SHA256SUMS
+          )
+      - name: Publish GitHub release assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            "dist/javafix-${GITHUB_REF_NAME#v}.jar" \
+            dist/javafix.jar \
+            dist/javafix-skill.tar.gz \
+            dist/SHA256SUMS \
+            --title "JavaFix $GITHUB_REF_NAME" \
+            --generate-notes

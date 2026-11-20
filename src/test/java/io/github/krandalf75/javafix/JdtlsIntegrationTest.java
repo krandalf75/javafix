@@ -175,6 +175,66 @@ class JdtlsIntegrationTest {
     }
 
     @Test
+    void jdtlsExtractMethodEditAcceptsExplicitSelectionWithoutName() throws Exception {
+        Assumptions.assumeTrue(Runtime.version().feature() >= 25,
+            "JDTLS integration tests require Java 25");
+        Path project = Files.createDirectory(temporaryDirectory.resolve("extract-method"));
+        Path source = Files.createDirectories(project.resolve("src/main/java/sample"))
+            .resolve("Methods.java");
+        Files.writeString(project.resolve("pom.xml"), """
+            <project xmlns="http://maven.apache.org/POM/4.0.0">
+              <modelVersion>4.0.0</modelVersion>
+              <groupId>sample</groupId><artifactId>extract-method</artifactId><version>1</version>
+              <properties><maven.compiler.release>17</maven.compiler.release></properties>
+            </project>
+            """);
+        String text = """
+            package sample;
+            class Methods {
+                int calculate(int input) {
+                    int doubled = input * 2;
+                    return doubled + 1;
+                }
+            }
+            """;
+        Files.writeString(source, text);
+        String uri = source.toUri().toString();
+        int start = text.indexOf("int doubled");
+        int end = text.indexOf(";", text.indexOf("return doubled")) + 1;
+        ObjectMapper json = new ObjectMapper();
+        var params = json.createObjectNode();
+        params.put("command", "extractMethod");
+        var context = params.putObject("context");
+        context.putObject("textDocument").put("uri", uri);
+        var range = context.putObject("range");
+        range.putObject("start").put("line", 3).put("character", start - text.lastIndexOf('\n', start) - 1);
+        range.putObject("end").put("line", 4).put("character", end - text.lastIndexOf('\n', end) - 1);
+        context.putObject("context").putArray("diagnostics");
+        var options = params.putObject("options");
+        options.put("tabSize", 4);
+        options.put("insertSpaces", true);
+
+        Path workspace = Files.createTempDirectory(temporaryDirectory, "jdtls-extract-method-workspace-");
+        Path configuration = Files.createTempDirectory(temporaryDirectory, "jdtls-extract-method-config-");
+        try (Main.LspSession session = Main.LspSession.start(
+            Main.extractJdtls(), configuration, workspace, project)) {
+            session.openDocument(uri, text);
+            Map<String, java.util.List<JsonNode>> diagnostics = new java.util.HashMap<>();
+            diagnostics.put(uri, new java.util.ArrayList<>());
+            session.awaitDiagnostics(diagnostics, java.time.Duration.ofMillis(500),
+                java.time.Duration.ofSeconds(15));
+            JsonNode response = session.request("java/getRefactorEdit", params);
+            assertTrue(response != null && response.hasNonNull("edit"), String.valueOf(response));
+            assertTrue(response.hasNonNull("command"), response.toPrettyString());
+            assertEquals("java.action.rename", response.path("command").path("command").asText(),
+                response.toPrettyString());
+        } finally {
+            Main.deleteTree(workspace);
+            Main.deleteTree(configuration);
+        }
+    }
+
+    @Test
     void cliAppliesTwoRepairsAndReturnsPostAnalysis() throws Exception {
         Assumptions.assumeTrue(Runtime.version().feature() >= 25,
             "JDTLS integration tests require Java 25");

@@ -2,6 +2,7 @@ package io.github.krandalf75.javafix;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -48,7 +49,7 @@ class PmdCloseResourceRepairIntegrationTest {
         Files.writeString(source, original);
 
         ObjectMapper json = new ObjectMapper();
-        JsonNode analysis = Main.analyze(Main.Options.parse(new String[]{
+        ObjectNode analysis = Main.analyze(Main.Options.parse(new String[]{
             "analyze", "--project", project.toString()}));
         JsonNode pmdResource = findRule(analysis, "PMD/CloseResource");
         assertTrue(pmdResource.path("resolution").path("automaticFixAvailable").asBoolean(),
@@ -60,6 +61,14 @@ class PmdCloseResourceRepairIntegrationTest {
         Path plan = project.resolve("pmd-repair.json");
         json.writeValue(plan.toFile(), json.createObjectNode().put("schemaVersion", "1")
             .set("repairs", json.createArrayNode().add(jdtlsAction.path("repairId").asText())));
+        byte[] originalBytes = Files.readAllBytes(source);
+        ObjectNode preview = Main.repair(Main.Options.parse(new String[]{
+            "repair", "--project", project.toString(), "--plan", plan.toString()}), ignored -> analysis);
+        assertEquals("preview", preview.path("status").asText(), preview.toPrettyString());
+        assertTrue(preview.path("changes").path(0).path("content").asText().contains("try ("),
+            preview.toPrettyString());
+        assertTrue(java.util.Arrays.equals(originalBytes, Files.readAllBytes(source)),
+            "The CloseResource preview must not write source bytes");
         ByteArrayOutputStream stdout = new ByteArrayOutputStream();
         PrintStream previousOut = System.out;
         JsonNode result;
@@ -86,8 +95,74 @@ class PmdCloseResourceRepairIntegrationTest {
         assertTrue(result.path("diagnosticChanges").path("complete").asBoolean());
     }
 
+    @Test
+    void doesNotClaimManualFinallyConversionWithoutVerifiedJdtlsEdit() throws Exception {
+        Assumptions.assumeTrue(Runtime.version().feature() >= 25,
+            "JDTLS integration tests require Java 25");
+        Path project = Files.createDirectory(temporaryDirectory.resolve("pmd-try-with-resources"));
+        Path source = Files.createDirectories(project.resolve("src/main/java/sample"))
+            .resolve("ManualClose.java");
+        Files.writeString(project.resolve("pom.xml"), """
+            <project xmlns="http://maven.apache.org/POM/4.0.0">
+              <modelVersion>4.0.0</modelVersion>
+              <groupId>sample</groupId><artifactId>manual-close</artifactId><version>1</version>
+              <properties><maven.compiler.release>17</maven.compiler.release></properties>
+            </project>
+            """);
+        Files.writeString(source, """
+            package sample;
+            import java.io.FileInputStream;
+            import java.io.IOException;
+            class ManualClose {
+                int read(String path) throws IOException {
+                    FileInputStream stream = new FileInputStream(path);
+                    try {
+                        return stream.read();
+                    } finally {
+                        stream.close();
+                    }
+                }
+            }
+            """);
+        Path sourceWithFinallyLogic = source.resolveSibling("ManualCloseWithFinallyLogic.java");
+        Files.writeString(sourceWithFinallyLogic, """
+            package sample;
+            import java.io.FileInputStream;
+            import java.io.IOException;
+            class ManualCloseWithFinallyLogic {
+                int read(String path) throws IOException {
+                    FileInputStream stream = new FileInputStream(path);
+                    try {
+                        return stream.read();
+                    } finally {
+                        System.getLogger(getClass().getName()).log(
+                            System.Logger.Level.DEBUG, "closing " + path);
+                        stream.close();
+                    }
+                }
+            }
+            """);
+
+        JsonNode analysis = Main.analyze(Main.Options.parse(new String[]{
+            "analyze", "--project", project.toString()}));
+        JsonNode candidate = findRule(analysis, "PMD/UseTryWithResources");
+        assertFalse(candidate.path("resolution").path("automaticFixAvailable").asBoolean(),
+            candidate.toPrettyString());
+        JsonNode candidateWithFinallyLogic = findRule(analysis, sourceWithFinallyLogic,
+            "PMD/UseTryWithResources");
+        assertFalse(candidateWithFinallyLogic.path("resolution").path("automaticFixAvailable").asBoolean(),
+            candidateWithFinallyLogic.toPrettyString());
+    }
+
     private static JsonNode findRule(JsonNode report, String ruleId) {
+        return findRule(report, null, ruleId);
+    }
+
+    private static JsonNode findRule(JsonNode report, Path source, String ruleId) {
         for (JsonNode file : report.path("files")) {
+            if (source != null && !source.toString().replace('\\', '/').endsWith(file.path("path").asText())) {
+                continue;
+            }
             for (JsonNode diagnostic : file.path("diagnostics")) {
                 if (ruleId.equals(diagnostic.path("ruleId").asText())) return diagnostic;
             }

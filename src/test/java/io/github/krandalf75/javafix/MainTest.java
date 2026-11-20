@@ -86,7 +86,10 @@ class MainTest {
             {"schemaVersion":"1","repairs":[{"id":"repair-1","unexpected":true}]}
             """,
             """
-            {"schemaVersion":"1","repairs":[{"id":"repair-1","parameters":{"constantName":"LIMIT"}}]}
+            {"schemaVersion":"1","repairs":[{"id":"repair-1","parameters":{"unknown":"LIMIT"}}]}
+            """,
+            """
+            {"schemaVersion":"1","repairs":[{"id":"repair-1","parameters":{"constantName":17}}]}
             """,
             """
             {"schemaVersion":"1","repairs":[42]}
@@ -371,6 +374,32 @@ class MainTest {
     }
 
     @Test
+    void onlyDirectEnabledQuickfixEditsAreAutomaticallyRepairable() {
+        ObjectNode directQuickfix = JSON.createObjectNode().put("kind", "quickfix");
+        directQuickfix.putObject("edit").putObject("changes");
+        assertTrue(Main.isAutomaticallyRepairable(directQuickfix));
+
+        ObjectNode refactor = JSON.createObjectNode().put("kind", "refactor.extract");
+        refactor.putObject("edit").putObject("changes");
+        assertFalse(Main.isAutomaticallyRepairable(refactor));
+
+        ObjectNode disabled = JSON.createObjectNode().put("kind", "quickfix");
+        disabled.putObject("edit").putObject("changes");
+        disabled.putObject("disabled").put("reason", "Not applicable");
+        assertFalse(Main.isAutomaticallyRepairable(disabled));
+
+        ObjectNode suppression = JSON.createObjectNode().put("title", "SuppressWarnings quick fix")
+            .put("kind", "quickfix");
+        suppression.putObject("edit").putObject("changes");
+        assertFalse(Main.isAutomaticallyRepairable(suppression));
+
+        ObjectNode commandBased = JSON.createObjectNode().put("kind", "quickfix")
+            .put("command", "java.action.rename");
+        commandBased.putObject("edit").putObject("changes");
+        assertFalse(Main.isAutomaticallyRepairable(commandBased));
+    }
+
+    @Test
     void lspSessionHandlesRequestsNotificationsAndDiagnosticsAgainstControlledServer() throws Exception {
         ControlledLspProcess server = new ControlledLspProcess();
         Main.LspSession session = new Main.LspSession(server);
@@ -397,6 +426,19 @@ class MainTest {
 
             JsonNode actions = session.request("textDocument/codeAction", JSON.createObjectNode());
             assertEquals("Remove unused import", actions.path(0).path("title").asText());
+            ObjectNode diagnostic = JSON.createObjectNode();
+            List<JsonNode> resolvedActions = session.codeActions("file:///Fixture.java", diagnostic);
+            assertEquals(3, resolvedActions.size());
+            assertEquals("Resolved action", resolvedActions.get(1).path("title").asText());
+            assertTrue(resolvedActions.get(1).hasNonNull("edit"));
+            JsonNode unresolved = resolvedActions.get(2);
+            assertEquals("Deferred failure", unresolved.path("title").asText());
+            assertTrue(unresolved.hasNonNull("resolveError"));
+            assertFalse(Main.isAutomaticallyRepairable(unresolved));
+            List<JsonNode> refactors = session.codeActions("file:///Fixture.java", diagnostic,
+                List.of("refactor.inline"));
+            assertEquals("refactor.inline", refactors.get(0).path("kind").asText());
+            assertFalse(Main.isAutomaticallyRepairable(refactors.get(0)));
         } finally {
             session.close();
         }
@@ -585,15 +627,38 @@ class MainTest {
                             result = capabilities;
                         } else if ("textDocument/codeAction".equals(method)) {
                             var actions = JSON.createArrayNode();
-                            actions.addObject().put("title", "Remove unused import");
+                            if (message.path("params").path("context").path("only").isArray()) {
+                                actions.addObject().put("title", "Inline local")
+                                    .put("kind", "refactor.inline").putObject("edit").putObject("changes");
+                            } else {
+                                actions.addObject().put("title", "Remove unused import");
+                                actions.addObject().put("title", "Deferred action").put("kind", "quickfix")
+                                    .putObject("data").put("token", "deferred");
+                                actions.addObject().put("title", "Deferred failure").put("kind", "quickfix")
+                                    .putObject("data").put("token", "fail");
+                            }
                             result = actions;
+                        } else if ("codeAction/resolve".equals(method)) {
+                            if ("fail".equals(message.path("params").path("data").path("token").asText())) {
+                                result = null;
+                            } else {
+                                ObjectNode resolved = JSON.createObjectNode().put("title", "Resolved action")
+                                    .put("kind", "quickfix");
+                                resolved.putObject("edit").putObject("changes");
+                                result = resolved;
+                            }
                         } else {
                             result = JSON.nullNode();
                         }
                         ObjectNode response = JSON.createObjectNode();
                         response.put("jsonrpc", "2.0");
                         response.set("id", id);
-                        response.set("result", result);
+                        if ("codeAction/resolve".equals(method)
+                            && "fail".equals(message.path("params").path("data").path("token").asText())) {
+                            response.putObject("error").put("code", -32602).put("message", "Cannot resolve");
+                        } else {
+                            response.set("result", result);
+                        }
                         writeMessage(output, response);
                     } else if ("textDocument/didOpen".equals(method)) {
                         JsonNode document = message.path("params").path("textDocument");

@@ -72,6 +72,63 @@ class CliProcessIntegrationTest {
             invalidCommand.stderr());
     }
 
+    @Test
+    void cooperativelyCancelsSubprocessAfterJdtlsStarts() throws Exception {
+        Assumptions.assumeTrue(Runtime.version().feature() >= 25,
+            "JDTLS integration tests require Java 25");
+        Path project = Files.createDirectory(temporaryDirectory.resolve("cancel-project"));
+        Path source = Files.createDirectories(project.resolve("src/main/java/sample"))
+            .resolve("Source.java");
+        Path pom = project.resolve("pom.xml");
+        Files.writeString(pom, """
+            <project xmlns="http://maven.apache.org/POM/4.0.0">
+              <modelVersion>4.0.0</modelVersion>
+              <groupId>sample</groupId><artifactId>cancel-project</artifactId><version>1</version>
+              <properties><maven.compiler.release>17</maven.compiler.release></properties>
+            </project>
+            """);
+        byte[] original = "package sample; class Source { int value() { return 1; } }\n"
+            .getBytes(StandardCharsets.UTF_8);
+        Files.write(source, original);
+        Path cancelFile = temporaryDirectory.resolve("cancel-request");
+
+        List<String> command = new ArrayList<>();
+        command.add(Path.of(System.getProperty("java.home"), "bin", "java").toString());
+        command.add("-cp");
+        command.add(System.getProperty("java.class.path"));
+        command.add(Main.class.getName());
+        command.addAll(List.of("analyze", "--project", pom.toString(),
+            "--cancel-file", cancelFile.toString()));
+        Path stdout = temporaryDirectory.resolve("cancel.stdout");
+        Path stderr = temporaryDirectory.resolve("cancel.stderr");
+        Process process = new ProcessBuilder(command)
+            .redirectOutput(stdout.toFile())
+            .redirectError(stderr.toFile())
+            .start();
+
+        long deadline = System.nanoTime() + Duration.ofSeconds(30).toNanos();
+        boolean jdtlsStarted = false;
+        while (process.isAlive() && System.nanoTime() < deadline) {
+            if (process.descendants().findAny().isPresent()) {
+                jdtlsStarted = true;
+                break;
+            }
+            Thread.sleep(25);
+        }
+        assertTrue(jdtlsStarted, "JDTLS subprocess did not start in time");
+        Files.createFile(cancelFile);
+        assertTrue(process.waitFor(Duration.ofSeconds(30).toMillis(), TimeUnit.MILLISECONDS),
+            "JavaFix did not stop after cooperative cancellation");
+
+        String output = Files.readString(stdout, StandardCharsets.UTF_8);
+        String error = Files.readString(stderr, StandardCharsets.UTF_8);
+        assertEquals(2, process.exitValue(), error);
+        assertEquals("", output, "Cancelled analysis must not emit a partial JSON report");
+        assertTrue(error.contains("cancel"), error);
+        assertTrue(java.util.Arrays.equals(original, Files.readAllBytes(source)),
+            "Cancellation during analysis must not modify source files");
+    }
+
     private ProcessResult runCli(String... arguments) throws Exception {
         Path stdout = temporaryDirectory.resolve("cli-" + System.nanoTime() + ".stdout");
         Path stderr = temporaryDirectory.resolve("cli-" + System.nanoTime() + ".stderr");

@@ -21,7 +21,7 @@ Construir una herramienta CLI para que una IA pueda analizar proyectos Java medi
 - [x] Crear proyectos de prueba `acme` reproducibles para Maven y Gradle, con casos deliberados, diagnósticos esperados y casos con/sin quick fix.
 - [x] Añadir pruebas unitarias del esquema/normalización, pruebas LSP con servidor controlado y pruebas de integración contra JDTLS en `acme`.
 - [x] Documentar compilación, ejecución, argumentos, JSON, configuración de JDTLS y limitaciones.
-- [x] Verificar con `mvn clean verify` y ejecutar el JAR contra los proyectos `acme`, comprobando salida y que no se modifica ningún fuente. (Integración local en macOS; matriz CI configurada para Linux, Windows y macOS, pendiente de su primera ejecución en GitHub.)
+- [x] Verificar con `mvn clean verify` y ejecutar el JAR empaquetado: `--help` y análisis CLI de un fixture `Inline Local` completados en macOS; la salida fue JSON completa y anunció `PMD/UnnecessaryLocalBeforeReturn` con `providerActions`. Se excluyeron las firmas de dependencias en el shade para evitar `Invalid signature file digest`.
 
 **Criterio de aceptación:** la CLI analiza una lista de ficheros de un proyecto Maven o Gradle, devuelve los diagnósticos de JDTLS con ubicación y código original, describe cómo abordarlos, lista las acciones disponibles y no modifica el proyecto.
 
@@ -31,7 +31,7 @@ Construir una herramienta CLI para que una IA pueda analizar proyectos Java medi
 
 ### 1. Base del proyecto
 
-- Configurar Maven con coordenadas `io.github.krandalf75:javafix:0.1.0` y compilar JavaFix para Java 17. Distribuir un JAR ejecutable con dependencias de aplicación y JDTLS incluidos; el runtime de `java -jar` será Java 25. Publicar en GitHub Packages.
+- Configurar Maven con coordenadas `io.github.krandalf75:javafix:0.2.0` y compilar JavaFix para Java 25. Distribuir un JAR ejecutable con dependencias de aplicación y JDTLS incluidos; el runtime de `java -jar` será Java 25. Publicar en GitHub Packages y como asset público de GitHub Release.
 - Definir paquetes para la interfaz de comandos, análisis, integración con JDTLS, reglas/reparaciones y salida.
 - Añadir pruebas automatizadas, formato/lint y comandos reproducibles para compilar y probar.
 - Documentar instalación, requisitos de JDTLS y configuración inicial en el README.
@@ -67,10 +67,10 @@ Construir una herramienta CLI para que una IA pueda analizar proyectos Java medi
 - [x] Probar cambios de configuración del compilador; la emisión de avisos varía con las opciones del proyecto.
 - [x] Probar varios ficheros abiertos, publicaciones repetidas y timeout parcial.
 - [x] Probar terminación inesperada de JDTLS; proyectos grandes/lentos y límites de memoria quedan pendientes de CI/perfilado.
-- [ ] Verificar el ciclo LSP y la selección de plataforma en Linux, Windows y macOS mediante CI.
-- [ ] Mantener `source`/`code` de JDTLS separados de identificadores de otros proveedores.
+- [x] Verificar el ciclo LSP y la selección de plataforma en Linux, Windows y macOS mediante la matriz CI.
+- [x] Mantener `source`/`code` de JDTLS separados de identificadores de otros proveedores; PMD y SpringBoot usan su origen, código local y `ruleId` propio.
 
-**Ya resuelto en Fase 1:** transporte LSP básico, inicialización/importación, cierre, diagnósticos, rangos, acciones de código y timeout/incomplete. La matriz CI para las tres familias de SO está configurada; falta su primera ejecución remota.
+**Ya resuelto en Fase 1:** transporte LSP básico, inicialización/importación, cierre, diagnósticos, rangos, acciones de código y timeout/incomplete. La matriz CI de Linux, Windows y macOS ha pasado.
 
 **Validación/aceptación:** catálogo probado con fixtures versionados; la respuesta conserva ubicación y código nativos; fallos y resultados incompletos son distinguibles.
 
@@ -97,18 +97,17 @@ Construir una herramienta CLI para que una IA pueda analizar proyectos Java medi
 
 **Checklist**
 
-- [x] Definir el contrato inicial de una reparación JDTLS: ID determinista ligado al contenido, título/tipo de acción y `WorkspaceEdit`; faltan campos explícitos de riesgo y precondiciones en el informe.
+- [x] Definir el contrato de reparaciones JDTLS y propias de JavaFix: ID determinista ligado al contenido, título/tipo de acción, origen (`jdtlsActions` o `providerActions`) y `WorkspaceEdit`; los límites y precondiciones de la reescritura Inline Local se describen junto a la regla.
 - [x] Permitir que un plan JSON seleccione reparaciones mediante IDs emitidos por JavaFix, sin pedir a la IA que redacte los cambios.
-- [ ] Distinguir acciones `quickfix` de refactorizaciones JDTLS (`refactor.*`); ambas pueden proponer ediciones, pero las refactorizaciones pueden requerir selección y parámetros.
-- [ ] Soportar parámetros requeridos por una reparación en el informe y el plan JSON (por ejemplo, `constantName` para extraer literales repetidos); describirlos a la IA, validarlos y transmitirlos a la API/command de JDTLS si se pueden especificar sin interacción.
-- [x] Verificar `java/getRefactorEdit` de JDTLS 1.61.0 en modo headless para Extract Constant: acepta `command: extractConstant` y el rango, devuelve `WorkspaceEdit` más `java.action.rename`, pero no un parámetro `constantName`. No se ofrece todavía como reparación automática parametrizada.
+- [x] Distinguir acciones `quickfix` de refactorizaciones JDTLS (`refactor.*`); solo quick fixes directos habilitados se ofrecen para aplicación automática. Las refactorizaciones se muestran como información y pueden requerir selección y parámetros.
+- [x] Declarar `requiredParameters` en el informe y validarlos en el plan v1 antes de generar la edición. Extract Constant requiere `parameters.constantName`; Extract Method requiere `parameters.selection` y `parameters.methodName`. Los planes v1 antiguos por ID siguen válidos para acciones sin parámetros. El esquema y el runtime rechazan propiedades desconocidas, rangos inválidos y nombres Java inválidos.
+- [x] Verificar `java/getRefactorEdit` de JDTLS 1.61.0 en modo headless para Extract Constant: acepta `command: extractConstant` y el rango, devuelve `WorkspaceEdit` más `java.action.rename`, pero no un parámetro `constantName`. La reparación parametrizada implementada usa `ASTRewrite` propio, no el comando interactivo de JDTLS.
 - [x] Probar Inline Local por `textDocument/codeAction` con `only: ["refactor.inline"]`; el fixture headless no recibe esa acción, así que no se anuncia ni se aplica como reparación.
-- [ ] Revisar la matriz de reglas PMD contra acciones y refactorizaciones JDTLS; implementar cada reparación verificable, con sus parámetros, precondiciones y fixtures, y documentar como no reparables las que no tengan una acción soportada.
-- [ ] Probar como candidatas restantes: `PMD/AvoidDuplicateLiterals` → Extract Constant (requiere nombre); `PMD/CloseResource`/`PMD/UseTryWithResources` → Surround with try-with-resources; y `PMD/CognitiveComplexity`/`PMD/NcssCount` → Extract Method (requiere selección y nombre).
+- [x] Revisar las reglas PMD frente a las acciones y refactorizaciones JDTLS; documentar como no reparables los casos que no tengan una acción verificada ni un reparador propio con precondiciones comprobadas. README y fixtures delimitan las reglas automáticas verificadas y los diagnósticos que no se anuncian como reparables.
 - [x] Probar `PMD/UnnecessaryLocalBeforeReturn` → Inline Local Variable; el code action `refactor.inline` no aparece en el fixture y no se ofrece.
 - [x] Probar `PMD/LambdaCanBeMethodReference` en el rango de la lambda; JDTLS ofrece otras acciones, pero no la conversión a method reference, así que no se vincula una reparación.
-- [ ] Añadir otras refactorizaciones solo tras verificar una acción/command real, sus parámetros, el `WorkspaceEdit` resultante y un fixture antes/después; no asumir que toda regla PMD tiene una refactorización equivalente.
-- [ ] Para hallazgos PMD, correlacionar el diagnóstico nativo JDTLS equivalente o solicitar `textDocument/codeAction` a JDTLS en el rango del hallazgo; ofrecer la reparación solo cuando una fixture confirme que la acción devuelta corrige ese caso.
+- [x] Añadir Extract Constant solo tras validar un fixture antes/después y el parámetro del plan; no inferir reparaciones para otras reglas PMD.
+- [x] Para hallazgos PMD, correlacionar el diagnóstico nativo JDTLS equivalente o solicitar `textDocument/codeAction` a JDTLS en el rango del hallazgo; ofrecer la reparación solo cuando una fixture confirme que la acción devuelta corrige ese caso. `CloseResource` se correlaciona por rango; las otras reparaciones verificadas usan sus propias transformaciones acotadas o parámetros de selección explícitos, sin asumir equivalencias.
 - [x] Empezar por `PMD/CloseResource` ↔ diagnóstico JDTLS de fuga; no inferir equivalencias para otras reglas PMD.
 - [x] Vincular `PMD/CloseResource` a un quick fix JDTLS solo cuando coincidan rango y diagnóstico de fuga; la fixture `acme/gradle` verifica el ID y `PmdCloseResourceRepairIntegrationTest` aplica la reparación y confirma que desaparece al reanalizar.
 - [x] Añadir vista previa de contenidos como comportamiento predeterminado y seleccionar reparaciones por ID.
@@ -117,12 +116,51 @@ Construir una herramienta CLI para que una IA pueda analizar proyectos Java medi
 - [x] Agrupar `WorkspaceEdit` directos compatibles de un mismo análisis y aplicar en lote; rechazar rangos solapados o planes obsoletos. Los cambios dependientes necesitan otro análisis/plan.
 - [x] Preparar ediciones mult fichero antes de escribir, preservar permisos POSIX, y restaurar solo archivos que aún contienen los bytes escritos por JavaFix; los reemplazos multiarchivo no son atómicos como conjunto.
 - [x] Preservar BOM UTF-8, finales CRLF, caracteres suplementarios y texto intacto; rechazar UTF-8 malformado antes de escribir. Otras codificaciones aún no están soportadas.
-- [ ] Empezar por quick fixes JDTLS deterministas, sin aplicar acciones de supresión como si fueran arreglos.
-- [ ] Permitir que JavaFix invoque JDTLS para reparar hallazgos PMD aunque PMD no tenga quick fix propio; si JDTLS no devuelve una acción verificable, informar que el caso no tiene reparación automática (o añadir un reparador JavaFix determinista con precondiciones y fixtures propios).
+- [x] Empezar por quick fixes JDTLS deterministas, sin aplicar acciones deshabilitadas ni de supresión como si fueran arreglos.
+- [x] Permitir que JavaFix invoque JDTLS para reparar hallazgos PMD aunque PMD no tenga quick fix propio; si JDTLS no devuelve una acción verificable, informar que el caso no tiene reparación automática (o añadir un reparador JavaFix determinista con precondiciones y fixtures propios). La integración se limita a `CloseResource` y Extract Method; Inline Local, Extract Constant y Lambda usan reparadores propios cubiertos por fixtures.
 - [x] Reanalizar después de aplicar y reportar diagnósticos resueltos, persistentes y nuevos mediante `postAnalysis` y `diagnosticChanges`; comparar identidades sin rango para tolerar desplazamientos de línea.
-- [x] Añadir cancelación cooperativa mediante `--cancel-file`, checkpoints durante LSP y transacciones, rollback de escrituras propias y pruebas de cancelación CLI/pre-write y rollback multifichero; queda pendiente una prueba subprocess que cancele JDTLS en ejecución.
+- [x] Añadir cancelación cooperativa mediante `--cancel-file`, checkpoints durante LSP y transacciones, rollback de escrituras propias y pruebas de cancelación CLI durante JDTLS, pre-write y rollback multifichero.
 - [x] Probar el flujo CLI no interactivo con dos reparaciones por ID en el mismo fichero, `--apply`, reanálisis, rechazo de selección duplicada y rechazo de plan obsoleto con código 2 sin alterar bytes; probar solapamientos antes de escribir con fixture unitaria.
 - [x] Verificar la reparación PMD `CloseResource` de extremo a extremo: hallar ID vinculado, aplicar el `WorkspaceEdit` JDTLS y comprobar que el hallazgo desaparece en el reanálisis.
+
+#### Ampliación de reparaciones: orden de implementación
+
+**Enfoque:** usar JDTLS para generar las ediciones que ya sabe hacer. Si no expone una acción utilizable sin interacción, implementar solo transformaciones concretas con Eclipse JDT y `ASTRewrite`, no con expresiones regulares. Ambas vías deben producir ediciones para el mismo flujo de JavaFix; una acción que compila no se considera segura por ese solo hecho.
+
+##### 1. Resolver acciones diferidas de JDTLS
+
+- [x] `Main.java` ya anuncia `resolveSupport`. Si una acción habilitada tiene `data` pero no `edit`, JavaFix envía la acción original a `codeAction/resolve` en la misma sesión y evalúa la respuesta con los filtros de una edición directa.
+- [x] No emitir un ID aplicable si la acción está deshabilitada, suprime el aviso, sigue sin edición o requiere un comando no soportado. `workspace/applyEdit` sigue deshabilitado: JDTLS propone y JavaFix valida y aplica. Pruebas controladas cubren resolución correcta, error de resolución, acciones deshabilitadas, supresión y refactorizaciones.
+- [x] Separar el descubrimiento de `quickfix` y `refactor.*`. `LspSession.codeActions` admite `context.only` y conserva el rango exacto; las pruebas confirman que `refactor.inline` no se considera reparación automática. Un hallazgo PMD no se trata como diagnóstico JDTLS ni garantiza una acción equivalente.
+
+##### 2. Probar `PMD/UseTryWithResources`
+
+- [x] Analizar fixtures donde el recurso **ya se cierra en `finally`**. JDTLS 1.61.0 no devuelve un quick fix verificable para estos hallazgos; no se emite `repairId`. La reparación de `PMD/CloseResource` sigue siendo un caso distinto: corrige una fuga.
+- [x] Cubrir también un `finally` con lógica adicional. No se anuncia reparación: además del posible cambio en orden/efectos, si fallan tanto el cuerpo como `close()`, try-with-resources puede cambiar qué excepción se propaga y cuál queda suprimida.
+- [x] Mantener `PMD/UseTryWithResources` como diagnóstico no reparable automáticamente hasta disponer de una transformación demostrablemente equivalente y fixtures antes/después. La integración comprueba que ambos fixtures no anuncian `automaticFixAvailable`.
+
+##### 3. Extract Constant parametrizado
+
+- [x] Verificado que JDTLS 1.61.0 devuelve `WorkspaceEdit` y `java.action.rename` para `extractConstant`, pero no admite `constantName` en la petición headless.
+- [x] En lugar de componer comandos interactivos, ofrecer una variante acotada de JavaFix con `ASTRewrite`: un literal `String` señalado por `PMD/AvoidDuplicateLiterals`, nombre `constantName` suministrado explícitamente en el plan y campo `private static final String`. Sustituir las ocurrencias con el mismo valor en la clase contenedora; rechazar literales no localizados, clases no admitidas, nombres inválidos y colisiones.
+- [x] Cubrir validación de parámetros, preview sin escritura, `--apply`, compilación/comportamiento antes y después y desaparición del diagnóstico PMD en el reanálisis.
+
+##### 4. Implementar reparaciones propias solo donde falte una acción
+
+- [x] **Inline Local (`PMD/UnnecessaryLocalBeforeReturn`).** JDTLS 1.61.0 no ofrece `refactor.inline` en el fixture. JavaFix implementa con Eclipse JDT `ASTRewrite` el caso restringido de una variable inicializada, con un único uso como expresión del `return` inmediatamente posterior. Solo se ofrece con análisis JDTLS completo y sin errores, exige una única candidata en la línea y preserva el tipo declarado mediante cast; rechaza `var`, usos adicionales, declaraciones múltiples, anotaciones, inicializadores/rangos con comentarios y casos ambiguos.
+- [x] Añadir un fixture negativo y de comportamiento para **Inline Local**: la prueba compila antes y después `Object f() { long n = 1; return n; }` y confirma que ambos devuelven un `Long`, frente a la diferencia que introduciría `return 1;` (`Integer`). La prueba end-to-end verifica preview sin escritura, `--apply` y desaparición del hallazgo.
+- [x] **Lambda a referencia de método (`PMD/LambdaCanBeMethodReference`).** JDTLS 1.61.0 ofrece otras acciones, pero no la conversión. JavaFix aplica `ASTRewrite` solo a una llamada estática cualificada por un nombre de tipo, con todos los parámetros reenviados directamente y en el mismo orden; vuelve a resolver la referencia y exige el mismo binding de método/overload. Rechaza receptores de instancia (`System.out.println`), métodos genéricos, argumentos transformados/reordenados y casos sin bindings. Pruebas cubren preview, apply, compilación, resultado observable, desaparición del hallazgo y el rechazo del receptor con semántica de captura distinta.
+
+##### 5. Extract Method como refactorización explícita
+
+- [x] Verificar `java/getRefactorEdit` de JDTLS 1.61.0 con la selección exacta: devuelve una edición y `java.action.rename`; JDTLS no recibe el nombre en esa petición.
+- [x] Exponer Extract Method para diagnósticos `PMD/CognitiveComplexity` y `PMD/NcssCount` con `selection` `{start,end}` en posiciones LSP 0-based y `methodName` obligatorios en el plan. La reparación vuelve a consultar JDTLS, aplica la primera edición solo en memoria y envía `textDocument/rename` con el nombre aportado; el WorkspaceEdit final es una edición respecto al fuente original.
+- [x] Probar preview sin escritura, `--apply`, reanálisis completo y rechazo de selección/nombre inválidos. La prueba de cancelación entre la edición Extract Method de JDTLS y el renombrado verifica que el fuente original queda intacto. No se elige bloque ni se inventa nombre automáticamente.
+
+##### 6. Validar el flujo común antes de habilitar cada reparación
+
+- [x] Mantener el plan JSON y la vista previa por defecto, sin escritura en el proyecto. Aplicar únicamente con `--apply`, regenerar y validar la edición contra las fuentes originales y rechazar planes obsoletos, rutas fuera del proyecto y ediciones solapadas. Para las ediciones compuestas, probar la cancelación entre pasos y comprobar que los originales no cambian (`RepairPreviewIntegrationTest`, `JdtlsIntegrationTest`, `MainTest`, `ExtractMethodRepairIntegrationTest`).
+- [x] Cubrir cada reparación con fixtures positivos de vista previa/aplicación y fixtures de rechazo de sus precondiciones; los casos sin una acción verificada se comprueban como no reparables. El reanálisis confirma los hallazgos resueltos y los diagnósticos posteriores. Las pruebas de Inline Local y Lambda comprueban además la preservación del comportamiento (`Pmd*RepairIntegrationTest`, `ExtractMethodRepairIntegrationTest`, `JdtlsIntegrationTest`, `InlineLocalRepairTest`, `LambdaMethodReferenceRepairTest`).
 
 **Validación/aceptación:** pruebas con fixtures antes/después; ninguna modificación ocurre sin una opción explícita y cada cambio es auditable.
 
@@ -140,7 +178,7 @@ Construir una herramienta CLI para que una IA pueda analizar proyectos Java medi
 - [x] Documentar cómo añadir un proveedor, regla o reparación con sus pruebas de fixture.
 - [x] Crear `.opencode/skills/javafix/SKILL.md` como skill de ejemplo para agentes: requisito Java 25, análisis, selección de `repairId`, plan JSON, vista previa y aplicación explícita.
 - [x] Validar CLI mediante subprocess sin TTY: JSON-only en stdout, error de uso en stderr/código 2 y flujo analyze/preview con rutas de proyecto/plan con espacios (`CliProcessIntegrationTest`).
-- [ ] Confirmar publicación/consumo real del artefacto en GitHub Packages; workflow tag-triggered implementado, pero requieren una primera publicación autorizada y validar acceso público de lectura.
+- [x] Confirmar publicación/consumo real del artefacto en GitHub Packages: `0.1.0` figura como público; el workflow de publicación del tag `v0.1.0` terminó correctamente (run `44532382122`) y el consumo Maven autenticado se valida con `dependency:get` en una caché vacía. El registry Maven requiere autenticación aun para paquetes públicos (la descarga anónima responde 401), así que se verifica visibilidad pública y consumo autenticado, no descarga anónima.
 
 **Validación/aceptación:** un agente puede analizar, elegir una acción, revisar su diff y solicitar su aplicación sin prompts interactivos; la salida y códigos de estado son estables y documentados.
 
