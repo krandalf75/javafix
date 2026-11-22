@@ -9,6 +9,16 @@ import io.github.krandalf75.javafix.analysis.SpringBootRuleProvider;
 import io.github.krandalf75.javafix.analysis.InlineLocalRepair;
 import io.github.krandalf75.javafix.analysis.ExtractConstantRepair;
 import io.github.krandalf75.javafix.analysis.LambdaMethodReferenceRepair;
+import io.github.krandalf75.javafix.analysis.SourceEdit;
+import io.github.krandalf75.javafix.analysis.ControlStatementBracesRepair;
+import io.github.krandalf75.javafix.analysis.CollapsibleIfRepair;
+import io.github.krandalf75.javafix.analysis.StandardCharsetRepair;
+import io.github.krandalf75.javafix.analysis.UnusedPrimitiveLocalRepair;
+import io.github.krandalf75.javafix.analysis.DiamondOperatorRepair;
+import io.github.krandalf75.javafix.analysis.CollectionIsEmptyRepair;
+import io.github.krandalf75.javafix.analysis.UnconditionalIfRepair;
+import io.github.krandalf75.javafix.analysis.IdenticalLiteralReturnsRepair;
+import io.github.krandalf75.javafix.analysis.UnusedLiteralAssignmentRepair;
 
 import java.io.BufferedInputStream;
 import java.io.BufferedOutputStream;
@@ -129,6 +139,7 @@ public final class Main {
 
             for (Path target : targets) {
                 options.cancellation.check();
+                int targetJavaSourceLevel = configuredJavaSourceLevel(root, target);
                 String uri = target.toUri().toString();
                 List<JsonNode> diagnostics = diagnosticsByUri.getOrDefault(uri, List.of());
                 ObjectNode file = JSON.createObjectNode();
@@ -142,9 +153,14 @@ public final class Main {
                 }
                 for (ObjectNode diagnostic : pmdDiagnostics.getOrDefault(target, List.of())) {
                     attachVerifiedPmdActions(target, diagnostic, jdtFindings,
-                        openedSources.get(target), diagnosticsComplete, options.cancellation);
+                        openedSources.get(target), diagnosticsComplete, options.cancellation,
+                        targetJavaSourceLevel);
                     findings.add(diagnostic);
                 }
+                options.cancellation.check();
+                associateVariableCanBeInlinedFindings(target,
+                    pmdDiagnostics.getOrDefault(target, List.of()), openedSources.get(target));
+                options.cancellation.check();
                 for (ObjectNode diagnostic : springDiagnostics.getOrDefault(target, List.of())) {
                     findings.add(diagnostic);
                 }
@@ -180,11 +196,247 @@ public final class Main {
         return result;
     }
 
+    static int configuredJavaSourceLevel(Path root) throws IOException {
+        int level = configuredDirectoryJavaSourceLevel(root, configuredGradleUserHome());
+        return Math.max(0, level);
+    }
+
+    static int configuredJavaSourceLevel(Path root, Path target) throws IOException {
+        return configuredJavaSourceLevel(root, target, configuredGradleUserHome());
+    }
+
+    static int configuredJavaSourceLevel(Path root, Path target, Path gradleUserHome) throws IOException {
+        Path normalizedRoot = root.toAbsolutePath().normalize();
+        Path normalizedTarget = target.toAbsolutePath().normalize();
+        if (!normalizedTarget.startsWith(normalizedRoot)) return 0;
+        List<Path> ancestors = new ArrayList<>();
+        for (Path directory = normalizedTarget.getParent(); directory != null
+            && directory.startsWith(normalizedRoot); directory = directory.getParent()) {
+            ancestors.add(directory);
+            if (directory.equals(normalizedRoot)) break;
+        }
+        java.util.Collections.reverse(ancestors);
+        List<Integer> levels = new ArrayList<>();
+        for (Path directory : ancestors) {
+            int configured = configuredDirectoryJavaSourceLevel(directory, gradleUserHome);
+            if (configured < 0) return 0;
+            if (configured > 0) levels.add(configured);
+        }
+        return levels.stream().mapToInt(Integer::intValue).min().orElse(0);
+    }
+
+    /** Returns -1 for an unresolved declared level, 0 for no level, or an explicit level. */
+    private static int configuredDirectoryJavaSourceLevel(Path root, Path gradleUserHome) throws IOException {
+        if (hasMavenCompilerOverrides(root)) return -1;
+        if (Files.exists(root.resolve("settings.gradle"))
+            || Files.exists(root.resolve("settings.gradle.kts"))) return -1;
+        List<Integer> levels = new ArrayList<>();
+        Path pom = root.resolve("pom.xml");
+        if (Files.isRegularFile(pom)) {
+            try {
+                javax.xml.parsers.DocumentBuilderFactory factory =
+                    javax.xml.parsers.DocumentBuilderFactory.newInstance();
+                factory.setNamespaceAware(true);
+                factory.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true);
+                factory.setAttribute(javax.xml.XMLConstants.ACCESS_EXTERNAL_DTD, "");
+                factory.setAttribute(javax.xml.XMLConstants.ACCESS_EXTERNAL_SCHEMA, "");
+                org.w3c.dom.Document document = factory.newDocumentBuilder().parse(pom.toFile());
+                if (directChild(document.getDocumentElement(), "parent") != null) return -1;
+                org.w3c.dom.NodeList properties = document.getElementsByTagNameNS("*", "properties");
+                for (int i = 0; i < properties.getLength(); i++) {
+                    org.w3c.dom.NodeList children = properties.item(i).getChildNodes();
+                    for (int j = 0; j < children.getLength(); j++) {
+                        org.w3c.dom.Node child = children.item(j);
+                        if (child.getNodeType() != org.w3c.dom.Node.ELEMENT_NODE) continue;
+                        String name = child.getLocalName();
+                        if (List.of("maven.compiler.release", "maven.compiler.source", "maven.compiler.target",
+                            "maven.compiler.testRelease", "maven.compiler.testSource", "maven.compiler.testTarget")
+                            .contains(name)) {
+                            if (!addJavaLevel(levels, child.getTextContent())) return -1;
+                        }
+                        if (name.toLowerCase(java.util.Locale.ROOT).contains("compiler")
+                            && name.toLowerCase(java.util.Locale.ROOT).contains("args")) return -1;
+                    }
+                }
+                org.w3c.dom.NodeList plugins = document.getElementsByTagNameNS("*", "plugin");
+                for (int i = 0; i < plugins.getLength(); i++) {
+                    org.w3c.dom.Node plugin = plugins.item(i);
+                    String artifactId = directChildText(plugin, "artifactId");
+                    if (!"maven-compiler-plugin".equals(artifactId)) continue;
+                    org.w3c.dom.Element pluginElement = (org.w3c.dom.Element) plugin;
+                    if (List.of("compilerArgs", "compilerArgument", "testCompilerArgs", "testCompilerArgument")
+                        .stream().anyMatch(option -> pluginElement.getElementsByTagNameNS("*", option).getLength() > 0)) {
+                        return -1;
+                    }
+                    for (String option : List.of("release", "source", "target",
+                        "testRelease", "testSource", "testTarget")) {
+                        org.w3c.dom.NodeList configured = ((org.w3c.dom.Element) plugin)
+                            .getElementsByTagNameNS("*", option);
+                        for (int j = 0; j < configured.getLength(); j++) {
+                            if (!addJavaLevel(levels, configured.item(j).getTextContent())) return -1;
+                        }
+                    }
+                }
+            } catch (Exception invalidOrUnsupportedPom) {
+                return -1;
+            }
+        }
+        for (String name : List.of("build.gradle", "build.gradle.kts")) {
+            Path gradle = root.resolve(name);
+            if (!Files.isRegularFile(gradle)) continue;
+            if (hasGradleInitScripts(gradleUserHome)) return -1;
+            String build = Files.readString(gradle, StandardCharsets.UTF_8);
+            if (java.util.regex.Pattern.compile("\\bapply\\s*(?:from\\s*:|\\(\\s*from\\s*=)")
+                .matcher(build).find()) return -1;
+            if (hasUnrecognizedGradlePlugins(build)) return -1;
+            if (java.util.regex.Pattern.compile("\\bcompilerArg\\w*\\b").matcher(build).find()) return -1;
+            if (java.util.regex.Pattern.compile(
+                "\\bsetRelease\\s*\\(|\\bset(?:Source|Target)Compatibility\\b|\\b(?:toolchain|languageVersion)\\b")
+                .matcher(build).find()) return -1;
+            java.util.regex.Matcher compatibility = java.util.regex.Pattern.compile(
+                "\\b(?:java\\.)?(?:sourceCompatibility|targetCompatibility)"
+                    + "[ \\t]*=[ \\t]*([^;}\\r\\n]*)")
+                .matcher(build);
+            int compatibilityAssignments = 0;
+            while (compatibility.find()) {
+                compatibilityAssignments++;
+                Integer level = parseGradleJavaLevel(compatibility.group(1));
+                if (level == null) return -1;
+                levels.add(level);
+            }
+            int compatibilityDeclarations = occurrences(build,
+                java.util.regex.Pattern.compile("\\b(?:sourceCompatibility|targetCompatibility)\\b"));
+            if (compatibilityDeclarations != compatibilityAssignments) return -1;
+            java.util.regex.Matcher release = java.util.regex.Pattern.compile(
+                "\\boptions\\.release(?:\\.set)?[ \\t]*(?:=[ \\t]*)?([^;}\\r\\n]*)")
+                .matcher(build);
+            int releaseAssignments = 0;
+            while (release.find()) {
+                releaseAssignments++;
+                Integer level = parseGradleJavaLevel(release.group(1));
+                if (level == null) return -1;
+                levels.add(level);
+            }
+            int releaseDeclarations = occurrences(build,
+                java.util.regex.Pattern.compile("\\boptions\\.release\\b"));
+            if (releaseDeclarations != releaseAssignments) return -1;
+        }
+        return levels.stream().mapToInt(Integer::intValue).min().orElse(0);
+    }
+
+    private static Path configuredGradleUserHome() {
+        String configured = System.getenv("GRADLE_USER_HOME");
+        return configured == null || configured.isBlank()
+            ? Path.of(System.getProperty("user.home"), ".gradle")
+            : Path.of(configured);
+    }
+
+    private static boolean hasGradleInitScripts(Path gradleUserHome) {
+        if (gradleUserHome == null) return true;
+        for (String name : List.of("init.gradle", "init.gradle.kts")) {
+            if (Files.exists(gradleUserHome.resolve(name))) return true;
+        }
+        Path initDirectory = gradleUserHome.resolve("init.d");
+        if (!Files.isDirectory(initDirectory)) return false;
+        try (var entries = Files.list(initDirectory)) {
+            return entries.anyMatch(Files::isRegularFile);
+        } catch (IOException | SecurityException inaccessibleInitDirectory) {
+            return true;
+        }
+    }
+
+    private static boolean hasMavenCompilerOverrides(Path root) throws IOException {
+        java.util.regex.Pattern setting = java.util.regex.Pattern.compile(
+            "(?:^|\\s)(?:(?:-D|--define)\\s*=?\\s*)?"
+                + "maven\\.compiler\\.(?:test)?(?:release|source|target)(?:\\s|=|$)");
+        for (String key : System.getProperties().stringPropertyNames()) {
+            if (key.startsWith("maven.compiler.")) return true;
+        }
+        for (String variable : List.of("MAVEN_ARGS", "MAVEN_OPTS", "JAVA_TOOL_OPTIONS", "JDK_JAVA_OPTIONS")) {
+            if (setting.matcher(System.getenv().getOrDefault(variable, "")).find()) return true;
+        }
+        for (String name : List.of("maven.config", "jvm.config")) {
+            Path config = root.resolve(".mvn").resolve(name);
+            if (Files.isRegularFile(config) && setting.matcher(Files.readString(config)).find()) return true;
+        }
+        return false;
+    }
+
+    private static boolean hasUnrecognizedGradlePlugins(String build) {
+        java.util.regex.Pattern externalPlugin = java.util.regex.Pattern.compile(
+            "\\bid\\s*\\(?\\s*['\\\"](?!java['\\\"]|java-library['\\\"])[^'\\\"]+['\\\"]"
+                + "|\\balias\\s*\\(|\\bapply\\s*\\(\\s*plugin\\s*=\\s*['\\\"]"
+                + "(?!java['\\\"]|java-library['\\\"])[^'\\\"]+['\\\"]"
+                + "|\\bapply\\s+plugin\\s*:\\s*['\\\"]"
+                + "(?!java['\\\"]|java-library['\\\"])[^'\\\"]+['\\\"]"
+                + "|\\bid\\s*\\(\\s*[^'\\\"\\s)]"
+                + "|\\bid\\s+(?!['\\\"])"
+        );
+        if (externalPlugin.matcher(build).find()) return true;
+
+        int pluginApplications = occurrences(build, java.util.regex.Pattern.compile(
+            "\\bapply\\s*(?:plugin\\s*:|\\()"));
+        int recognizedApplications = occurrences(build, java.util.regex.Pattern.compile(
+            "\\bapply\\s+plugin\\s*:\\s*['\\\"](?:java|java-library)['\\\"]"
+                + "|\\bapply\\s*\\(\\s*plugin\\s*=\\s*['\\\"](?:java|java-library)['\\\"]\\s*\\)"));
+        return pluginApplications != recognizedApplications;
+    }
+
+    private static String directChildText(org.w3c.dom.Node parent, String localName) {
+        org.w3c.dom.Node child = directChild(parent, localName);
+        return child == null ? "" : child.getTextContent().trim();
+    }
+
+    private static org.w3c.dom.Node directChild(org.w3c.dom.Node parent, String localName) {
+        org.w3c.dom.NodeList children = parent.getChildNodes();
+        for (int i = 0; i < children.getLength(); i++) {
+            org.w3c.dom.Node child = children.item(i);
+            if (child.getNodeType() == org.w3c.dom.Node.ELEMENT_NODE
+                && localName.equals(child.getLocalName())) return child;
+        }
+        return null;
+    }
+
+    private static int occurrences(String source, java.util.regex.Pattern pattern) {
+        java.util.regex.Matcher matcher = pattern.matcher(source);
+        int result = 0;
+        while (matcher.find()) result++;
+        return result;
+    }
+
+    private static Integer parseGradleJavaLevel(String value) {
+        String normalized = value.trim();
+        java.util.regex.Matcher javaVersion = java.util.regex.Pattern.compile(
+            "JavaVersion\\.VERSION_(?:1_)?(\\d{1,2})").matcher(normalized);
+        if (javaVersion.matches()) normalized = javaVersion.group(1);
+        else if (normalized.matches("['\"]\\d{1,2}['\"]")) normalized = normalized.substring(1, normalized.length() - 1);
+        try {
+            int level = Integer.parseInt(normalized);
+            return level >= 1 && level <= 99 ? level : null;
+        } catch (NumberFormatException unresolvedOrSymbolic) {
+            return null;
+        }
+    }
+
+    private static boolean addJavaLevel(List<Integer> levels, String value) {
+        String normalized = value.trim();
+        if (normalized.startsWith("1.")) normalized = normalized.substring(2);
+        try {
+            int level = Integer.parseInt(normalized);
+            if (level < 1 || level > 99) return false;
+            levels.add(level);
+            return true;
+        } catch (NumberFormatException unresolvedOrSymbolic) {
+            return false;
+        }
+    }
+
     private static void attachVerifiedPmdActions(Path target, ObjectNode pmdFinding,
                                                  List<ObjectNode> jdtFindings,
                                                  String sourceSnapshot,
                                                  boolean diagnosticsComplete,
-                                                 CancellationToken cancellation) throws Exception {
+                                                 CancellationToken cancellation,
+                                                 int targetJavaSourceLevel) throws Exception {
         String ruleId = pmdFinding.path("ruleId").asText();
         if ("PMD/LambdaCanBeMethodReference".equals(ruleId)) {
             if (!diagnosticsComplete || sourceSnapshot == null
@@ -231,6 +483,66 @@ public final class Main {
                 resolution.put("automaticFixAvailable", true);
                 resolution.put("description", "Convierte solo llamadas estáticas que reenvían los parámetros "
                     + "de la lambda en orden y resuelven a la misma sobrecarga.");
+            }
+            return;
+        }
+        if ("PMD/ControlStatementBraces".equals(ruleId)
+            || "PMD/CollapsibleIfStatements".equals(ruleId)
+            || "PMD/UseStandardCharsets".equals(ruleId)
+            || "PMD/UnusedLocalVariable".equals(ruleId)
+            || "PMD/UseDiamondOperator".equals(ruleId)
+            || "PMD/UseCollectionIsEmpty".equals(ruleId)
+            || "PMD/UnconditionalIfStatement".equals(ruleId)
+            || "PMD/IdenticalConditionalBranches".equals(ruleId)
+            || "PMD/UnusedAssignment".equals(ruleId)) {
+            if (!diagnosticsComplete || sourceSnapshot == null
+                || !Files.readString(target, StandardCharsets.UTF_8).equals(sourceSnapshot)) return;
+            cancellation.check();
+            int line = pmdFinding.path("range").path("start").path("line").asInt(-1);
+            int column = pmdFinding.path("range").path("start").path("column").asInt(-1);
+            java.util.Optional<SourceEdit> replacement;
+            try {
+                replacement = switch (ruleId) {
+                    case "PMD/ControlStatementBraces" -> ControlStatementBracesRepair.rewrite(
+                        sourceSnapshot, target.getFileName().toString(), line, column);
+                    case "PMD/CollapsibleIfStatements" -> CollapsibleIfRepair.rewrite(
+                        sourceSnapshot, target.getFileName().toString(), line, column);
+                    case "PMD/UseStandardCharsets" -> targetJavaSourceLevel >= 7
+                        ? StandardCharsetRepair.rewrite(sourceSnapshot, target.getFileName().toString(), line, column)
+                        : java.util.Optional.empty();
+                    case "PMD/UnusedLocalVariable" -> UnusedPrimitiveLocalRepair.rewrite(
+                        sourceSnapshot, target.getFileName().toString(), line, column);
+                    case "PMD/UseDiamondOperator" -> DiamondOperatorRepair.rewrite(
+                        sourceSnapshot, target.getFileName().toString(), line, column,
+                        targetJavaSourceLevel);
+                    case "PMD/UseCollectionIsEmpty" -> CollectionIsEmptyRepair.rewrite(
+                        sourceSnapshot, target.getFileName().toString(), line, column);
+                    case "PMD/UnconditionalIfStatement" -> UnconditionalIfRepair.rewrite(
+                        sourceSnapshot, target.getFileName().toString(), line, column);
+                    case "PMD/IdenticalConditionalBranches" -> IdenticalLiteralReturnsRepair.rewrite(
+                        sourceSnapshot, target.getFileName().toString(), line, column);
+                    default -> UnusedLiteralAssignmentRepair.rewrite(
+                        sourceSnapshot, target.getFileName().toString(), line, column);
+                };
+            } catch (CancellationException cancelled) {
+                throw cancelled;
+            } catch (Exception unsupported) {
+                return;
+            }
+            cancellation.check();
+            if (replacement.isPresent()) {
+                attachProviderRepair(pmdFinding, target, sourceSnapshot, replacement.get(),
+                    switch (ruleId) {
+                        case "PMD/ControlStatementBraces" -> "Add braces to control statement";
+                        case "PMD/CollapsibleIfStatements" -> "Collapse nested if statements";
+                        case "PMD/UseStandardCharsets" -> "Use StandardCharsets constant";
+                        case "PMD/UseDiamondOperator" -> "Use diamond operator";
+                        case "PMD/UseCollectionIsEmpty" -> "Use collection isEmpty check";
+                        case "PMD/UnconditionalIfStatement" -> "Simplify unconditional if";
+                        case "PMD/IdenticalConditionalBranches" -> "Merge identical literal returns";
+                        case "PMD/UnusedAssignment" -> "Remove overwritten literal assignment";
+                        default -> "Remove unused primitive local";
+                    });
             }
             return;
         }
@@ -353,6 +665,12 @@ public final class Main {
                 + "proporcionats al pla; JavaFix no tria codi ni inventa un nom.");
             return;
         }
+        if ("PMD/UnnecessaryImport".equals(ruleId)) {
+            if (!diagnosticsComplete || sourceSnapshot == null
+                || !Files.readString(target, StandardCharsets.UTF_8).equals(sourceSnapshot)) return;
+            attachVerifiedUnusedImportAction(target, pmdFinding, jdtFindings, sourceSnapshot);
+            return;
+        }
         if (!"PMD/CloseResource".equals(ruleId)) return;
         ObjectNode resolution = (ObjectNode) pmdFinding.path("resolution");
         ArrayNode actions = resolution.putArray("jdtlsActions");
@@ -375,6 +693,172 @@ public final class Main {
             resolution.put("note",
                 "Acción JDTLS asociada por regla y rango; la acción solo se ofrece si existe un WorkspaceEdit directo.");
         }
+    }
+
+    private static void attachVerifiedUnusedImportAction(Path target, ObjectNode pmdFinding,
+                                                         List<ObjectNode> jdtFindings,
+                                                         String source) throws Exception {
+        var unit = io.github.krandalf75.javafix.analysis.AstSupport.parse(
+            source, target.getFileName().toString(), false);
+        int pmdOffset = io.github.krandalf75.javafix.analysis.AstSupport.offsetAt(unit, source,
+            pmdFinding.path("range").path("start").path("line").asInt(-1),
+            pmdFinding.path("range").path("start").path("column").asInt(-1));
+        if (pmdOffset < 0) return;
+        final org.eclipse.jdt.core.dom.ImportDeclaration[] imported = {null};
+        unit.accept(new org.eclipse.jdt.core.dom.ASTVisitor() {
+            @Override public boolean visit(org.eclipse.jdt.core.dom.ImportDeclaration node) {
+                int start = node.getStartPosition();
+                if (start <= pmdOffset && pmdOffset < start + node.getLength()) imported[0] = node;
+                return true;
+            }
+        });
+        var declaration = imported[0];
+        if (declaration == null || declaration.isStatic() || declaration.isOnDemand()
+            || io.github.krandalf75.javafix.analysis.AstSupport.hasComment(unit,
+                declaration.getStartPosition(), declaration.getStartPosition() + declaration.getLength())) return;
+        String uri = target.toUri().toString();
+        for (ObjectNode jdtFinding : jdtFindings) {
+            if (!"Java".equals(jdtFinding.path("source").asText())
+                || !"268435844".equals(jdtFinding.path("code").asText())) continue;
+            JsonNode lspStart = jdtFinding.path("lspRange").path("start");
+            int jdtOffset;
+            try {
+                jdtOffset = offset(source, lspStart);
+            } catch (IllegalArgumentException invalidRange) {
+                continue;
+            }
+            if (jdtOffset < declaration.getStartPosition()
+                || jdtOffset >= declaration.getStartPosition() + declaration.getLength()) continue;
+            for (JsonNode action : jdtFinding.path("resolution").path("jdtlsActions")) {
+                if (!action.path("fixesDiagnostic").asBoolean()
+                    || action.path("suppressesWarning").asBoolean()
+                    || !"quickfix".equals(action.path("kind").asText())
+                    || !action.hasNonNull("repairId") || action.hasNonNull("command")) continue;
+                JsonNode edit = action.path("workspaceEdit");
+                JsonNode changes = edit.path("changes");
+                if (edit.has("documentChanges") || changes.size() != 1
+                    || !changes.has(uri) || !changes.path(uri).isArray()
+                    || changes.path(uri).size() != 1) continue;
+                JsonNode textEdit = changes.path(uri).get(0);
+                int editStart;
+                int editEnd;
+                try {
+                    editStart = offset(source, textEdit.path("range").path("start"));
+                    editEnd = offset(source, textEdit.path("range").path("end"));
+                } catch (IllegalArgumentException invalidEdit) {
+                    continue;
+                }
+                int importStart = declaration.getStartPosition();
+                int importEnd = importStart + declaration.getLength();
+                if (editEnd < editStart || editStart > importStart || editEnd < importEnd
+                    || !textEdit.path("newText").asText().isEmpty()
+                    || !source.substring(editStart, importStart).isBlank()
+                    || !source.substring(importEnd, editEnd).isBlank()
+                    || io.github.krandalf75.javafix.analysis.AstSupport.hasComment(unit, editStart, editEnd)) {
+                    continue;
+                }
+                ObjectNode associated = action.deepCopy();
+                associated.put("associatedDiagnostic", jdtFinding.path("message").asText());
+                ((ObjectNode) pmdFinding.path("resolution")).withArray("jdtlsActions").add(associated);
+                ObjectNode resolution = (ObjectNode) pmdFinding.path("resolution");
+                resolution.put("hasJdtlsAction", true);
+                resolution.put("automaticFixAvailable", true);
+                resolution.put("description", "JavaFix linked this PMD import finding to a single-import "
+                    + "JDTLS deletion after verifying the exact AST declaration and edit range.");
+                return;
+            }
+        }
+    }
+
+    private static boolean isLocalDeclarationAt(org.eclipse.jdt.core.dom.CompilationUnit unit, int offset) {
+        final int[] matches = {0};
+        unit.accept(new org.eclipse.jdt.core.dom.ASTVisitor() {
+            @Override public boolean visit(org.eclipse.jdt.core.dom.VariableDeclarationFragment fragment) {
+                if (fragment.getStartPosition() <= offset
+                    && offset < fragment.getStartPosition() + fragment.getLength()
+                    && fragment.getParent() instanceof org.eclipse.jdt.core.dom.VariableDeclarationStatement) {
+                    matches[0]++;
+                }
+                return true;
+            }
+        });
+        return matches[0] == 1;
+    }
+
+    private static void associateVariableCanBeInlinedFindings(Path target, List<ObjectNode> findings,
+                                                               String source) throws Exception {
+        if (source == null || !Files.readString(target, StandardCharsets.UTF_8).equals(source)) return;
+        var unit = io.github.krandalf75.javafix.analysis.AstSupport.parse(
+            source, target.getFileName().toString(), false);
+        for (ObjectNode variableFinding : findings) {
+            if (!"PMD/VariableCanBeInlined".equals(variableFinding.path("ruleId").asText())) continue;
+            int variableOffset = io.github.krandalf75.javafix.analysis.AstSupport.offsetAt(unit, source,
+                variableFinding.path("range").path("start").path("line").asInt(-1),
+                variableFinding.path("range").path("start").path("column").asInt(-1));
+            var variableDeclaration = declarationNameAt(unit, variableOffset);
+            if (variableDeclaration == null) continue;
+            for (ObjectNode inlineFinding : findings) {
+                if (!"PMD/UnnecessaryLocalBeforeReturn".equals(inlineFinding.path("ruleId").asText())) continue;
+                int inlineOffset = io.github.krandalf75.javafix.analysis.AstSupport.offsetAt(unit, source,
+                    inlineFinding.path("range").path("start").path("line").asInt(-1),
+                    inlineFinding.path("range").path("start").path("column").asInt(-1));
+                if (declarationNameAt(unit, inlineOffset) != variableDeclaration) continue;
+                JsonNode sourceActions = inlineFinding.path("resolution").path("providerActions");
+                for (JsonNode sourceAction : sourceActions) {
+                    if (!sourceAction.path("repairable").asBoolean()
+                        || !sourceAction.path("fixesDiagnostic").asBoolean()
+                        || !sourceAction.path("hasWorkspaceEdit").asBoolean()
+                        || !sourceAction.hasNonNull("repairId")
+                        || !sourceAction.hasNonNull("workspaceEdit")) continue;
+                    ObjectNode associated = sourceAction.deepCopy();
+                    associated.put("associatedDiagnostic", variableFinding.path("message").asText());
+                    ObjectNode resolution = (ObjectNode) variableFinding.path("resolution");
+                    resolution.withArray("providerActions").add(associated);
+                    resolution.put("automaticFixAvailable", true);
+                    resolution.put("description", "Uses the same exact immediate-return inline action as "
+                        + "PMD/UnnecessaryLocalBeforeReturn; the repair ID is shared.");
+                    break;
+                }
+                if (variableFinding.path("resolution").path("automaticFixAvailable").asBoolean()) break;
+            }
+        }
+    }
+
+    private static org.eclipse.jdt.core.dom.VariableDeclarationFragment declarationNameAt(
+        org.eclipse.jdt.core.dom.CompilationUnit unit, int offset) {
+        if (offset < 0) return null;
+        final List<org.eclipse.jdt.core.dom.VariableDeclarationFragment> matches = new ArrayList<>();
+        unit.accept(new org.eclipse.jdt.core.dom.ASTVisitor() {
+            @Override
+            public boolean visit(org.eclipse.jdt.core.dom.VariableDeclarationFragment fragment) {
+                org.eclipse.jdt.core.dom.SimpleName name = fragment.getName();
+                if (name.getStartPosition() <= offset
+                    && offset < name.getStartPosition() + name.getLength()) matches.add(fragment);
+                return true;
+            }
+        });
+        return matches.size() == 1 ? matches.getFirst() : null;
+    }
+
+    private static void attachProviderRepair(ObjectNode finding, Path target, String source,
+                                             SourceEdit sourceEdit, String title) throws Exception {
+        byte[] sourceBytes = source.getBytes(StandardCharsets.UTF_8);
+        String uri = target.toUri().toString();
+        ObjectNode workspaceEdit = sourceEdit.workspaceEdit(uri, source);
+        String id = repairId(uri, title, finding.path("range"), workspaceEdit, sourceBytes);
+        ObjectNode resolution = (ObjectNode) finding.path("resolution");
+        ObjectNode action = resolution.withArray("providerActions").addObject();
+        action.put("title", title);
+        action.put("kind", "quickfix");
+        action.put("source", "JavaFix");
+        action.put("available", true);
+        action.put("fixesDiagnostic", true);
+        action.put("repairable", true);
+        action.put("hasWorkspaceEdit", true);
+        action.set("workspaceEdit", workspaceEdit);
+        action.put("repairId", id);
+        resolution.put("automaticFixAvailable", true);
+        resolution.put("description", "JavaFix generated a localized AST-validated source edit.");
     }
 
     private static ObjectNode extractMethodEdit(Path project, Path target, String source,
@@ -662,6 +1146,9 @@ public final class Main {
             if (!options.apply) change.put("content", entry.getValue());
         }
         if (options.apply) {
+            if (options.expectedPreview != null) {
+                verifyExpectedPreview(options.project, options.expectedPreview, result, ids);
+            }
             writeTransaction(original, updated, options.cancellation);
             // Once the write transaction commits, finish the post-analysis so the caller
             // receives the applied result rather than an ambiguous cancellation error.
@@ -671,6 +1158,51 @@ public final class Main {
             result.set("diagnosticChanges", compareDiagnostics(report, postAnalysis));
         }
         return result;
+    }
+
+    static void verifyExpectedPreview(Path project, Path expectedPreview, JsonNode candidate,
+                                      Set<String> repairIds) throws Exception {
+        JsonNode expected = JSON.readTree(expectedPreview.toFile());
+        if (!"1".equals(expected.path("schemaVersion").asText())
+            || !"preview".equals(expected.path("status").asText())
+            || !expected.path("repairs").isArray() || !expected.path("changes").isArray()) {
+            throw new IllegalArgumentException("Expected preview file is not a JavaFix v1 preview.");
+        }
+        Set<String> expectedIds = new HashSet<>();
+        for (JsonNode repair : expected.path("repairs")) {
+            String id = repair.path("id").asText();
+            if (id.isBlank() || !expectedIds.add(id)) {
+                throw new IllegalArgumentException("Expected preview has empty or duplicate repair IDs.");
+            }
+        }
+        if (!expectedIds.equals(repairIds)) {
+            throw new IllegalArgumentException("Repair IDs differ from the reviewed preview.");
+        }
+        Map<String, String> expectedHashes = previewHashes(project, expected.path("changes"));
+        Map<String, String> candidateHashes = previewHashes(project, candidate.path("changes"));
+        if (!expectedHashes.equals(candidateHashes)) {
+            throw new IllegalArgumentException("Generated changes differ from the reviewed preview.");
+        }
+    }
+
+    private static Map<String, String> previewHashes(Path project, JsonNode changes) throws Exception {
+        if (!changes.isArray()) throw new IllegalArgumentException("Preview changes must be an array.");
+        Path root = project.toRealPath();
+        Map<String, String> hashes = new LinkedHashMap<>();
+        for (JsonNode change : changes) {
+            String path = change.path("path").asText();
+            String before = change.path("beforeHash").asText();
+            String after = change.path("afterHash").asText();
+            if (path.isBlank() || !before.matches("[0-9a-f]{64}") || !after.matches("[0-9a-f]{64}")) {
+                throw new IllegalArgumentException("Preview contains an invalid path or source hash.");
+            }
+            Path resolved = root.resolve(path).normalize();
+            if (!resolved.startsWith(root) || !root.relativize(resolved).toString().replace('\\', '/').equals(path)
+                || hashes.putIfAbsent(path, before + ":" + after) != null) {
+                throw new IllegalArgumentException("Preview contains an unsafe or duplicate file path.");
+            }
+        }
+        return hashes;
     }
 
     @FunctionalInterface
@@ -1296,7 +1828,7 @@ public final class Main {
     private static void usage() {
         System.out.println("""
                 javafix analyze --project <pom.xml|build.gradle|directorio> [--files <A.java> <B.java> ...] [--cancel-file <ruta>]
-                javafix repair --project <pom.xml|build.gradle|directorio> --plan <plan.json> [--apply] [--cancel-file <ruta>]
+                javafix repair --project <pom.xml|build.gradle|directorio> --plan <plan.json> [--apply] [--expect-preview <result.json>] [--cancel-file <ruta>]
 
                 Analiza fuentes Java mediante JDTLS y devuelve JSON en stdout.
                 Sin --files, analiza los ficheros Java encontrados en el proyecto.
@@ -1327,6 +1859,7 @@ public final class Main {
     static final class Options {
         Path project;
         Path plan;
+        Path expectedPreview;
         Path cancelFile;
         CancellationToken cancellation = CancellationToken.none();
         boolean apply;
@@ -1343,6 +1876,9 @@ public final class Main {
                 } else if ("--plan".equals(arg)) {
                     readingFiles = false;
                     options.plan = Paths.get(requireValue(args, ++i, arg));
+                } else if ("--expect-preview".equals(arg)) {
+                    readingFiles = false;
+                    options.expectedPreview = Paths.get(requireValue(args, ++i, arg));
                 } else if ("--cancel-file".equals(arg)) {
                     readingFiles = false;
                     options.cancelFile = Paths.get(requireValue(args, ++i, arg));
@@ -1361,6 +1897,9 @@ public final class Main {
             }
             if (options.project == null) {
                 throw new IllegalArgumentException("Falta --project.");
+            }
+            if (options.expectedPreview != null && !options.apply) {
+                throw new IllegalArgumentException("--expect-preview requiere --apply.");
             }
             options.cancellation = new CancellationToken(options.cancelFile);
             return options;

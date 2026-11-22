@@ -1,0 +1,10 @@
+# Package 1 — `PMD/ControlStatementBraces`
+
+- **Candidate:** base `c1f3347f5603122cdaf8294a73fc34fc979786cd` plus the current uncommitted patch.
+- **Environment:** macOS; Temurin Java 25.0.3; Maven 3.10.1; PMD 7.29.0; JDTLS 1.61.0.
+- **Keep-awake:** tracked PID 76060 (`caffeinate -dimsu`) was not running at final process check; no live process remained to stop.
+- **Supported shape:** one located, single-line, unbraced non-`if` statement body; `ControlStatementBracesRepair`. Multiline and commented bodies are rejected.
+- **Evidence:** `VerifiedSimpleRepairsTest#addsBracesToOneLocatedIfBodyAndDeclinesMultilineOrCommentedBodies` covers the matcher positive and rejected shapes. `PmdSingleLineControlRepairIntegrationTest#previewsAndAppliesReportedControlStatementBracesAndPreservesRuntimeOutput` reproducibly observes the PMD finding, previews/applies the repair, and compiles/runs before and after with `--release 8` (output `1`).
+- **Baseline-red / candidate-green:** Both packaged analyses report `PMD/ControlStatementBraces`. Baseline commit `c1f3347f5603122cdaf8294a73fc34fc979786cd` has no provider action; candidate offers action `d9a99f17b14d20fa9aae727a216c2b58574dc4be84f4daee98324e9601c488a5`. Baseline JSON: `/private/var/folders/tx/4j5_b0rs5416t1ptw8x_bhjw0000gn/T/opencode/javafix-package3-baseline/target/brace-baseline-analysis.json`; candidate: `target/brace-candidate-analysis.json`.
+- **Packaged CLI preview/apply:** Preview is non-writing; apply with `--expect-preview` matched the reviewed content/hash and post-analysis completed with zero errors and the target warning removed. JSON retained at `target/brace-candidate-{analysis,cli-preview,cli-applied}.json`; before/after SHA-256: `d8f47d5e5b76f8bc54488558542c37f4407385bf4e17caa90e984313b81856a0` / `d7c3083d78cef509ac1c9bbdb270c82658ac50d8aebc623e09ce79010daf51a8`.
+- **Full verification:** `mvn verify` after adding the reproducible integration test — 100 tests, 0 failures/errors/skips. **Independent review:** APPROVED; reviewer confirmed the matcher remains conservative and the routed/apply artifact is consistent. **Package status:** `APPROVED`.

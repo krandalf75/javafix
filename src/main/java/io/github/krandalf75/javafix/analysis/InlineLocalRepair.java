@@ -11,9 +11,12 @@ import org.eclipse.jdt.core.dom.CastExpression;
 import org.eclipse.jdt.core.dom.CompilationUnit;
 import org.eclipse.jdt.core.dom.Expression;
 import org.eclipse.jdt.core.dom.MethodDeclaration;
+import org.eclipse.jdt.core.dom.MarkerAnnotation;
 import org.eclipse.jdt.core.dom.Modifier;
+import org.eclipse.jdt.core.dom.NormalAnnotation;
 import org.eclipse.jdt.core.dom.ReturnStatement;
 import org.eclipse.jdt.core.dom.SimpleName;
+import org.eclipse.jdt.core.dom.SingleMemberAnnotation;
 import org.eclipse.jdt.core.dom.Type;
 import org.eclipse.jdt.core.dom.VariableDeclarationFragment;
 import org.eclipse.jdt.core.dom.VariableDeclarationStatement;
@@ -90,6 +93,18 @@ public final class InlineLocalRepair {
         for (Object modifier : declaration.modifiers()) {
             if (modifier instanceof Annotation || !(modifier instanceof Modifier)) return null;
         }
+        boolean[] annotatedType = {false};
+        declaration.getType().accept(new ASTVisitor() {
+            private boolean found() {
+                annotatedType[0] = true;
+                return false;
+            }
+
+            @Override public boolean visit(MarkerAnnotation annotation) { return found(); }
+            @Override public boolean visit(NormalAnnotation annotation) { return found(); }
+            @Override public boolean visit(SingleMemberAnnotation annotation) { return found(); }
+        });
+        if (annotatedType[0]) return null;
 
         MethodDeclaration method = enclosingMethod(declaration);
         if (method == null || method.getBody() == null || enclosingMethod(returnStatement) != method) return null;

@@ -38,6 +38,24 @@ class InlineLocalRepairTest {
     }
 
     @Test
+    void preservesBoxedLongReturnBehavior() throws Exception {
+        String before = """
+            public class InlinedBoxedLong {
+                public Object value() {
+                    Long result = 1000L;
+                    return result;
+                }
+            }
+            """;
+        String after = InlineLocalRepair.rewriteAtLine(before, 3).orElseThrow();
+        Object beforeValue = invokeValue("InlinedBoxedLong", before);
+        Object afterValue = invokeValue("InlinedBoxedLong", after);
+        assertEquals(Long.class, beforeValue.getClass());
+        assertEquals(beforeValue, afterValue);
+        assertTrue(after.contains("return (Long) 1000L;") || after.contains("return (Long)1000L;"), after);
+    }
+
+    @Test
     void rejectsOtherUsesNonAdjacentReturnsVarAndComments() throws Exception {
         assertRejected("""
             class OtherUse {
@@ -69,6 +87,44 @@ class InlineLocalRepairTest {
             class Commented {
                 int value() {
                     int result = /* important */ 1;
+                    return result;
+                }
+            }
+            """);
+        assertRejected("""
+            class ThrowInsteadOfReturn {
+                int value() {
+                    int result = 1;
+                    throw new IllegalStateException();
+                }
+            }
+            """);
+        assertRejected("""
+            class YieldInsteadOfReturn {
+                int value(int selector) {
+                    return switch (selector) {
+                        case 0 -> {
+                            int result = 1;
+                            yield result;
+                        }
+                        default -> 0;
+                    };
+                }
+            }
+            """);
+        assertRejected("""
+            class TwoCandidatesOnOneLine {
+                int first() { int result = 1; return result; } int second() { int result = 2; return result; }
+            }
+            """);
+        assertRejected("""
+            import java.lang.annotation.*;
+            @Retention(RetentionPolicy.RUNTIME)
+            @Target(ElementType.TYPE_USE)
+            @interface Marker {}
+            class AnnotatedLocal {
+                Object value() {
+                    @Marker Long result = 1000L;
                     return result;
                 }
             }

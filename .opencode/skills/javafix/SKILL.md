@@ -104,8 +104,17 @@ actions whose `fixesDiagnostic` is `true`. Parameterized actions may not contain
 a `workspaceEdit` until JavaFix validates the required plan parameters. JDTLS
 actions appear in `resolution.jdtlsActions`; JavaFix-owned rewrites appear in
 `resolution.providerActions`. Verified PMD repairs include `PMD/CloseResource`,
-restricted `PMD/UnnecessaryLocalBeforeReturn`, parameterized Extract Constant
-for `PMD/AvoidDuplicateLiterals`, and only binding-verified static calls for
+`PMD/UnnecessaryImport`, the restricted `PMD/UnnecessaryLocalBeforeReturn` and
+`PMD/VariableCanBeInlined` immediate-return rewrites, and these bounded
+transformations: `ControlStatementBraces`, `CollapsibleIfStatements`,
+`UseStandardCharsets`, `UnusedLocalVariable`, `UseDiamondOperator`,
+`UseCollectionIsEmpty`, `UnconditionalIfStatement`,
+`IdenticalConditionalBranches`, and `UnusedAssignment`. These cover only the
+documented narrow shapes; other findings, including unsupported shapes of
+these rules, remain diagnostic-only. See the JavaFix repository's
+`docs/plans/verified-warning-repairs.md` evidence ledger for each boundary.
+Also verified are parameterized Extract Constant for
+`PMD/AvoidDuplicateLiterals` and only binding-verified static calls for
 `PMD/LambdaCanBeMethodReference`. Extract Method for PMD
 `CognitiveComplexity`/`NcssCount` is an explicit refactoring, not an automatic
 diagnostic fix.

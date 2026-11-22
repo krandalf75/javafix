@@ -49,8 +49,12 @@ class PmdInlineLocalRepairIntegrationTest {
         ObjectNode analysis = Main.analyze(Main.Options.parse(new String[]{
             "analyze", "--project", project.toString()}));
         JsonNode finding = findRule(analysis, "PMD/UnnecessaryLocalBeforeReturn");
+        JsonNode variableFinding = findRule(analysis, "PMD/VariableCanBeInlined");
         JsonNode action = finding.path("resolution").path("providerActions").get(0);
+        JsonNode associatedAction = variableFinding.path("resolution").path("providerActions").get(0);
         assertTrue(action.hasNonNull("repairId"), finding.toPrettyString());
+        assertEquals(action.path("repairId").asText(), associatedAction.path("repairId").asText(),
+            "The two PMD findings for the same local must share one repair ID.");
         assertEquals("JavaFix", action.path("source").asText());
         String repairId = action.path("repairId").asText();
         Path plan = project.resolve("plan.json");

@@ -38,6 +38,377 @@ class MainTest {
     }
 
     @Test
+    void applyCanBeBoundToTheExactReviewedPreview() throws Exception {
+        Path project = Files.createDirectory(temporaryDirectory.resolve("preview-binding"));
+        String hashBefore = "a".repeat(64);
+        String hashAfter = "b".repeat(64);
+        ObjectNode preview = JSON.createObjectNode().put("schemaVersion", "1").put("status", "preview");
+        preview.putArray("repairs").addObject().put("id", "repair-1");
+        preview.putArray("changes").addObject().put("path", "src/Sample.java")
+            .put("beforeHash", hashBefore).put("afterHash", hashAfter);
+        Path previewFile = project.resolve("preview.json");
+        JSON.writeValue(previewFile.toFile(), preview);
+        ObjectNode generated = JSON.createObjectNode().put("schemaVersion", "1").put("status", "applied");
+        generated.putArray("changes").addObject().put("path", "src/Sample.java")
+            .put("beforeHash", hashBefore).put("afterHash", hashAfter);
+
+        Main.verifyExpectedPreview(project, previewFile, generated, java.util.Set.of("repair-1"));
+        assertThrows(IllegalArgumentException.class, () ->
+            Main.verifyExpectedPreview(project, previewFile, generated, java.util.Set.of("different-id")));
+
+        ((ObjectNode) generated.path("changes").get(0)).put("afterHash", "c".repeat(64));
+        assertThrows(IllegalArgumentException.class, () ->
+            Main.verifyExpectedPreview(project, previewFile, generated, java.util.Set.of("repair-1")));
+        ObjectNode duplicatePath = preview.deepCopy();
+        ((com.fasterxml.jackson.databind.node.ArrayNode) duplicatePath.path("changes"))
+            .add(duplicatePath.path("changes").get(0).deepCopy());
+        Path duplicatePreview = project.resolve("duplicate-preview.json");
+        JSON.writeValue(duplicatePreview.toFile(), duplicatePath);
+        assertThrows(IllegalArgumentException.class, () ->
+            Main.verifyExpectedPreview(project, duplicatePreview, generated,
+                java.util.Set.of("repair-1")));
+        ObjectNode incomplete = preview.deepCopy();
+        incomplete.put("status", "incomplete");
+        Path incompletePreview = project.resolve("incomplete-preview.json");
+        JSON.writeValue(incompletePreview.toFile(), incomplete);
+        assertThrows(IllegalArgumentException.class, () ->
+            Main.verifyExpectedPreview(project, incompletePreview, generated,
+                java.util.Set.of("repair-1")));
+        assertThrows(IllegalArgumentException.class, () -> Main.Options.parse(new String[]{
+            "repair", "--project", project.toString(), "--plan", previewFile.toString(),
+            "--expect-preview", previewFile.toString()}));
+    }
+
+    @Test
+    void sourceLevelDetectionForSyntaxRepairsRequiresExplicitBuildMetadata() throws Exception {
+        Path project = Files.createDirectory(temporaryDirectory.resolve("source-level"));
+        assertEquals(0, Main.configuredJavaSourceLevel(project));
+        Files.writeString(project.resolve("pom.xml"), """
+            <project><properties><!-- <maven.compiler.release>25</maven.compiler.release> --></properties></project>
+            """);
+        assertEquals(0, Main.configuredJavaSourceLevel(project));
+        Files.writeString(project.resolve("pom.xml"), """
+            <project><properties><maven.compiler.release>8</maven.compiler.release></properties></project>
+            """);
+        assertEquals(8, Main.configuredJavaSourceLevel(project));
+        Files.writeString(project.resolve("pom.xml"), """
+            <project><properties>
+              <maven.compiler.release>${java.version}</maven.compiler.release>
+              <maven.compiler.source>8</maven.compiler.source>
+            </properties></project>
+            """);
+        assertEquals(0, Main.configuredJavaSourceLevel(project),
+            "An unresolved configured level must disable syntax-sensitive repairs.");
+        Files.delete(project.resolve("pom.xml"));
+        Files.writeString(project.resolve("build.gradle"), """
+            plugins { id 'java' }
+            // sourceCompatibility = JavaVersion.VERSION_25
+            java {
+                sourceCompatibility = JavaVersion.VERSION_17
+                targetCompatibility = JavaVersion.VERSION_17
+            }
+            """);
+        assertEquals(17, Main.configuredJavaSourceLevel(project));
+        Files.writeString(project.resolve("build.gradle"), """
+            plugins { id 'java' }
+            java {
+                sourceCompatibility = javaVersion
+                targetCompatibility = JavaVersion.VERSION_17
+            }
+            """);
+        assertEquals(0, Main.configuredJavaSourceLevel(project),
+            "A symbolic Gradle level must not be ignored in favor of a numeric declaration.");
+    }
+
+    @Test
+    void sourceLevelDetectionIsScopedToTheTargetBuildAndMavenPluginOverrides() throws Exception {
+        Path gradleRoot = Files.createDirectory(temporaryDirectory.resolve("multi-gradle"));
+        Files.writeString(gradleRoot.resolve("build.gradle"), """
+            plugins { id 'java' }
+            sourceCompatibility = JavaVersion.VERSION_17
+            targetCompatibility = JavaVersion.VERSION_17
+            """);
+        Path subproject = Files.createDirectories(gradleRoot.resolve("sub"));
+        Files.writeString(subproject.resolve("build.gradle"), """
+            plugins { id 'java' }
+            sourceCompatibility = javaVersion
+            targetCompatibility = JavaVersion.VERSION_17
+            """);
+        Path gradleTarget = Files.createDirectories(subproject.resolve("src/main/java")).resolve("Sample.java");
+        Files.writeString(gradleTarget, "class Sample {}");
+        assertEquals(0, Main.configuredJavaSourceLevel(gradleRoot, gradleTarget),
+            "An unresolved subproject source level must disable the repair for that source.");
+        Files.writeString(subproject.resolve("build.gradle"), """
+            plugins { id 'java' }
+            sourceCompatibility = JavaVersion.VERSION_1_8
+            targetCompatibility = JavaVersion.VERSION_1_8
+            """);
+        assertEquals(8, Main.configuredJavaSourceLevel(gradleRoot, gradleTarget),
+            "A numeric subproject level must constrain the root level.");
+        Files.writeString(subproject.resolve("build.gradle"), """
+            plugins { id 'java' }
+            java { sourceCompatibility = JavaVersion.VERSION_1_6; targetCompatibility = JavaVersion.VERSION_1_6 }
+            """);
+        assertEquals(6, Main.configuredJavaSourceLevel(gradleRoot, gradleTarget),
+            "Inline older subproject assignments must not be hidden by a numeric root level.");
+        Files.writeString(subproject.resolve("build.gradle"), """
+            plugins { id 'java' }
+            java { options.release = 6 }
+            """);
+        assertEquals(6, Main.configuredJavaSourceLevel(gradleRoot, gradleTarget),
+            "Inline release overrides must constrain the subproject level.");
+        Files.writeString(subproject.resolve("build.gradle"), """
+            plugins { id 'java' }
+            sourceCompatibility = JavaVersion.VERSION_17
+            targetCompatibility = JavaVersion.VERSION_17
+            apply from: 'compiler-settings.gradle'
+            """);
+        assertEquals(0, Main.configuredJavaSourceLevel(gradleRoot, gradleTarget),
+            "An applied build script with unknown compiler settings must disable the repair.");
+        Files.writeString(subproject.resolve("build.gradle"), """
+            plugins { id 'java' }
+            sourceCompatibility = JavaVersion.VERSION_17
+            tasks.withType(JavaCompile).configureEach {
+                options.compilerArgs += ['-source', '6', '-target', '6']
+            }
+            """);
+        assertEquals(0, Main.configuredJavaSourceLevel(gradleRoot, gradleTarget),
+            "Compiler arguments may override source compatibility and must fail closed.");
+        Files.writeString(subproject.resolve("build.gradle"), """
+            plugins { id 'java' }
+            sourceCompatibility = JavaVersion.VERSION_17
+            tasks.withType(JavaCompile).configureEach {
+                options.compilerArgumentProviders.add(new CommandLineArgumentProvider() {
+                    Iterable<String> asArguments() { return ['-source', '6', '-target', '6'] }
+                })
+            }
+            """);
+        assertEquals(0, Main.configuredJavaSourceLevel(gradleRoot, gradleTarget),
+            "Compiler argument providers may override source compatibility and must fail closed.");
+        Files.writeString(subproject.resolve("build.gradle"), """
+            plugins { id 'java' }
+            sourceCompatibility = JavaVersion.VERSION_17
+            tasks.withType(JavaCompile).configureEach {
+                options.setRelease(6)
+            }
+            """);
+        assertEquals(0, Main.configuredJavaSourceLevel(gradleRoot, gradleTarget),
+            "setRelease may override source compatibility and must fail closed.");
+        Files.writeString(subproject.resolve("build.gradle"), """
+            plugins { id 'java' }
+            sourceCompatibility = JavaVersion.VERSION_17
+            targetCompatibility = JavaVersion.VERSION_17
+            tasks.withType(JavaCompile).configureEach {
+                setSourceCompatibility('1.6')
+                setTargetCompatibility('1.6')
+            }
+            """);
+        assertEquals(0, Main.configuredJavaSourceLevel(gradleRoot, gradleTarget),
+            "JavaCompile compatibility setter calls may override declared compatibility and must fail closed.");
+        Files.writeString(subproject.resolve("build.gradle"), """
+            plugins { id 'java' }
+            sourceCompatibility = JavaVersion.VERSION_17
+            targetCompatibility = JavaVersion.VERSION_17
+            tasks.withType(JavaCompile).configureEach {
+                setSourceCompatibility '1.6'
+                setTargetCompatibility '1.6'
+            }
+            """);
+        assertEquals(0, Main.configuredJavaSourceLevel(gradleRoot, gradleTarget),
+            "Groovy parenthesis-free compatibility setter calls must fail closed.");
+        Files.writeString(subproject.resolve("build.gradle"), """
+            plugins { id 'java' }
+            sourceCompatibility = JavaVersion.VERSION_17
+            java { toolchain { languageVersion = JavaLanguageVersion.of(6) } }
+            """);
+        assertEquals(0, Main.configuredJavaSourceLevel(gradleRoot, gradleTarget),
+            "A toolchain language version may set the effective source level and must fail closed.");
+        Files.writeString(subproject.resolve("build.gradle"), """
+            plugins {
+                id 'java'
+                id 'com.example.java-conventions'
+            }
+            sourceCompatibility = JavaVersion.VERSION_17
+            """);
+        assertEquals(0, Main.configuredJavaSourceLevel(gradleRoot, gradleTarget),
+            "An external convention plugin can override compiler settings and must fail closed.");
+        Files.writeString(subproject.resolve("build.gradle"), """
+            buildscript {
+                dependencies { classpath 'com.example:java-conventions:1.0' }
+            }
+            def conventions = 'com.example.java-conventions'
+            apply plugin: conventions
+            sourceCompatibility = JavaVersion.VERSION_17
+            """);
+        assertEquals(0, Main.configuredJavaSourceLevel(gradleRoot, gradleTarget),
+            "A variable-based convention plugin application must fail closed.");
+        Files.writeString(subproject.resolve("build.gradle"), """
+            def conventions = 'com.example.java-conventions'
+            apply(plugin: conventions)
+            sourceCompatibility = JavaVersion.VERSION_17
+            """);
+        assertEquals(0, Main.configuredJavaSourceLevel(gradleRoot, gradleTarget),
+            "A Groovy named-argument plugin application must fail closed when unresolved.");
+
+        Path initScriptProject = Files.createDirectory(temporaryDirectory.resolve("gradle-init-script-project"));
+        Files.writeString(initScriptProject.resolve("build.gradle"), """
+            plugins { id 'java' }
+            sourceCompatibility = JavaVersion.VERSION_17
+            targetCompatibility = JavaVersion.VERSION_17
+            """);
+        Path initTarget = Files.createDirectories(initScriptProject.resolve("src/main/java"))
+            .resolve("Sample.java");
+        Files.writeString(initTarget, "class Sample {}");
+        Path gradleUserHome = Files.createDirectory(temporaryDirectory.resolve("gradle-user-home"));
+        assertEquals(17, Main.configuredJavaSourceLevel(initScriptProject, initTarget, gradleUserHome));
+        Path initDirectory = Files.createDirectories(gradleUserHome.resolve("init.d"));
+        Files.writeString(initDirectory.resolve("compiler-policy.gradle"), """
+            allprojects {
+                tasks.withType(JavaCompile).configureEach {
+                    sourceCompatibility = '1.6'
+                }
+            }
+            """);
+        assertEquals(0, Main.configuredJavaSourceLevel(initScriptProject, initTarget, gradleUserHome),
+            "An init script in Gradle user home may override project source levels and must fail closed.");
+        Path settingsProject = Files.createDirectory(temporaryDirectory.resolve("gradle-settings-script-project"));
+        Files.writeString(settingsProject.resolve("build.gradle"), """
+            plugins { id 'java' }
+            sourceCompatibility = JavaVersion.VERSION_17
+            targetCompatibility = JavaVersion.VERSION_17
+            """);
+        Files.writeString(settingsProject.resolve("settings.gradle"), """
+            gradle.beforeProject { project ->
+                project.plugins.withId('java') {
+                    project.tasks.withType(JavaCompile).configureEach {
+                        sourceCompatibility = '1.6'
+                        targetCompatibility = '1.6'
+                    }
+                }
+            }
+            """);
+        Path settingsTarget = Files.createDirectories(settingsProject.resolve("src/main/java"))
+            .resolve("Sample.java");
+        Files.writeString(settingsTarget, "class Sample {}");
+        assertEquals(0, Main.configuredJavaSourceLevel(settingsProject, settingsTarget, gradleUserHome),
+            "An uninspected Gradle settings script may change the effective compiler level and must fail closed.");
+        Path multiProjectRoot = Files.createDirectory(temporaryDirectory.resolve("gradle-settings-root"));
+        Files.writeString(multiProjectRoot.resolve("settings.gradle"), """
+            gradle.beforeProject { project ->
+                project.plugins.withId('java') {
+                    project.tasks.withType(JavaCompile).configureEach {
+                        sourceCompatibility = '1.6'
+                        targetCompatibility = '1.6'
+                    }
+                }
+            }
+            include 'module'
+            """);
+        Path module = Files.createDirectory(multiProjectRoot.resolve("module"));
+        Files.writeString(module.resolve("build.gradle"), """
+            plugins { id 'java' }
+            sourceCompatibility = JavaVersion.VERSION_17
+            targetCompatibility = JavaVersion.VERSION_17
+            """);
+        Path moduleTarget = Files.createDirectories(module.resolve("src/main/java")).resolve("Sample.java");
+        Files.writeString(moduleTarget, "class Sample {}");
+        assertEquals(0, Main.configuredJavaSourceLevel(multiProjectRoot, moduleTarget, gradleUserHome),
+            "A root settings script must be inspected even when the root has no build.gradle.");
+
+        Path mavenRoot = Files.createDirectory(temporaryDirectory.resolve("multi-maven"));
+        Files.writeString(mavenRoot.resolve("pom.xml"), """
+            <project><properties><maven.compiler.release>17</maven.compiler.release></properties></project>
+            """);
+        Path mavenModule = Files.createDirectories(mavenRoot.resolve("module"));
+        Files.writeString(mavenModule.resolve("pom.xml"), """
+            <project><build><plugins><plugin>
+              <artifactId>maven-compiler-plugin</artifactId>
+              <configuration><release>${module.release}</release></configuration>
+            </plugin></plugins></build></project>
+            """);
+        Path mavenTarget = Files.createDirectories(mavenModule.resolve("src/main/java"))
+            .resolve("Sample.java");
+        Files.writeString(mavenTarget, "class Sample {}");
+        assertEquals(0, Main.configuredJavaSourceLevel(mavenRoot, mavenTarget),
+            "An unresolved compiler-plugin override must disable the repair.");
+        Files.writeString(mavenModule.resolve("pom.xml"), """
+            <project><build><plugins><plugin>
+              <artifactId>maven-compiler-plugin</artifactId>
+              <configuration><release>8</release></configuration>
+            </plugin></plugins></build></project>
+            """);
+        assertEquals(8, Main.configuredJavaSourceLevel(mavenRoot, mavenTarget),
+            "A numeric module compiler override must constrain the target level.");
+        Files.writeString(mavenModule.resolve("pom.xml"), """
+            <project><build><plugins><plugin>
+              <artifactId>maven-compiler-plugin</artifactId>
+              <configuration>
+                <compilerArgs><arg>--release</arg><arg>6</arg></compilerArgs>
+              </configuration>
+            </plugin></plugins></build></project>
+            """);
+        assertEquals(0, Main.configuredJavaSourceLevel(mavenRoot, mavenTarget),
+            "Compiler arguments can override the configured Java level and must fail closed.");
+        Files.writeString(mavenModule.resolve("pom.xml"), """
+            <project><properties>
+              <maven.compiler.testSource>1.6</maven.compiler.testSource>
+              <maven.compiler.testTarget>1.6</maven.compiler.testTarget>
+            </properties></project>
+            """);
+        Path mavenTestTarget = Files.createDirectories(mavenModule.resolve("src/test/java"))
+            .resolve("SampleTest.java");
+        Files.writeString(mavenTestTarget, "class SampleTest {}");
+        assertEquals(6, Main.configuredJavaSourceLevel(mavenRoot, mavenTestTarget),
+            "Test-compile source levels must be included in the target gate.");
+        Files.writeString(mavenModule.resolve("pom.xml"), """
+            <project><build><plugins><plugin>
+              <artifactId>maven-compiler-plugin</artifactId>
+              <configuration><testRelease>6</testRelease></configuration>
+            </plugin></plugins></build></project>
+            """);
+        assertEquals(6, Main.configuredJavaSourceLevel(mavenRoot, mavenTestTarget),
+            "A test-specific compiler plugin release must constrain the level.");
+
+        Path inheritedParent = Files.createDirectory(temporaryDirectory.resolve("inherited-parent"));
+        Files.writeString(inheritedParent.resolve("pom.xml"), """
+            <project><build><plugins><plugin>
+              <artifactId>maven-compiler-plugin</artifactId>
+              <configuration><release>6</release></configuration>
+            </plugin></plugins></build></project>
+            """);
+        Path selectedModule = Files.createDirectories(inheritedParent.resolve("selected-module"));
+        Files.writeString(selectedModule.resolve("pom.xml"), """
+            <project>
+              <parent><groupId>example</groupId><artifactId>parent</artifactId><version>1</version></parent>
+              <properties><maven.compiler.release>17</maven.compiler.release></properties>
+            </project>
+            """);
+        Path inheritedTarget = Files.createDirectories(selectedModule.resolve("src/main/java"))
+            .resolve("Sample.java");
+        Files.writeString(inheritedTarget, "class Sample {}");
+        assertEquals(0, Main.configuredJavaSourceLevel(selectedModule, inheritedTarget),
+            "An unexamined Maven parent may contribute compiler settings and must fail closed.");
+
+        Path mavenCliProject = Files.createDirectory(temporaryDirectory.resolve("maven-cli-override"));
+        Files.writeString(mavenCliProject.resolve("pom.xml"), """
+            <project><properties><maven.compiler.release>17</maven.compiler.release></properties></project>
+            """);
+        Path mavenConfig = Files.createDirectories(mavenCliProject.resolve(".mvn"));
+        Files.writeString(mavenConfig.resolve("maven.config"), "-Dmaven.compiler.release=6\n");
+        Path cliTarget = Files.createDirectories(mavenCliProject.resolve("src/main/java"))
+            .resolve("Sample.java");
+        Files.writeString(cliTarget, "class Sample {}");
+        assertEquals(0, Main.configuredJavaSourceLevel(mavenCliProject, cliTarget),
+            "A persisted Maven user-property override must disable the repair.");
+        Files.writeString(mavenConfig.resolve("maven.config"), "--define=maven.compiler.release=6\n");
+        assertEquals(0, Main.configuredJavaSourceLevel(mavenCliProject, cliTarget),
+            "The Maven --define long option must be recognized as a compiler override.");
+        Files.writeString(mavenConfig.resolve("jvm.config"), "-Dmaven.compiler.release=6\n");
+        assertEquals(0, Main.configuredJavaSourceLevel(mavenCliProject, cliTarget),
+            "A project Maven JVM option must be recognized as a compiler override.");
+    }
+
+    @Test
     void suggestsClosingLeakedResources() {
         assertTrue(Main.resolutionText("Resource leak: 'stream' is never closed").contains("try-with-resources"));
     }

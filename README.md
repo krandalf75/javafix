@@ -39,7 +39,7 @@ La URL apunta al asset público de la última GitHub Release; el instalador veri
 su checksum antes de instalarlo.
 
 El instalador obtiene la última release (o la versión indicada con
-`--version 0.2.0`), verifica SHA-256 y coloca la skill en
+`--version 0.3.0`), verifica SHA-256 y coloca la skill en
 `~/.config/opencode/skills/javafix`. El JAR queda en
 `~/.local/share/javafix/javafix.jar`. Para instalar la skill solo en el proyecto
 actual, ejecuta `sh "$HOME/install-javafix-skill.sh" --local`; también se puede
@@ -57,7 +57,7 @@ mvn clean verify
 mkdir -p ~/.config/opencode/skills
 ln -s ~/.local/share/javafix/.opencode/skills/javafix \
   ~/.config/opencode/skills/javafix
-export JAVAFIX_JAR="$HOME/.local/share/javafix/target/javafix-0.2.0.jar"
+export JAVAFIX_JAR="$HOME/.local/share/javafix/target/javafix-0.3.0.jar"
 ```
 
 Obre/recarrega OpenCode perquè detecti la skill.
@@ -75,12 +75,12 @@ instal·lació local al projecte a `.opencode/skills/javafix/SKILL.md`.
 mvn clean verify
 ```
 
-El artefacto ejecutable queda en `target/javafix-0.2.0.jar`.
+El artefacto ejecutable queda en `target/javafix-0.3.0.jar`.
 
 ## Analizar
 
 ```sh
-java -jar target/javafix-0.2.0.jar analyze \
+java -jar target/javafix-0.3.0.jar analyze \
   --project /ruta/al/proyecto/pom.xml \
   --files src/main/java/example/A.java src/main/java/example/B.java
 ```
@@ -125,18 +125,18 @@ Para Extract Method, selecciona explícitamente el rango de código en coordenad
 ```
 
 ```sh
-java -jar target/javafix-0.2.0.jar repair --project /ruta/proyecto --plan repair.json
-java -jar target/javafix-0.2.0.jar repair --project /ruta/proyecto --plan repair.json --apply
+java -jar target/javafix-0.3.0.jar repair --project /ruta/proyecto --plan repair.json
+java -jar target/javafix-0.3.0.jar repair --project /ruta/proyecto --plan repair.json --apply
 ```
 
-Sin `--apply` no se modifica ningún archivo; la respuesta muestra el contenido propuesto. La aplicación vuelve a analizar y regenerar las acciones, por lo que rechaza IDs que ya no existen; también valida que todos los destinos pertenezcan al proyecto y que los rangos no se solapen. Las ediciones multiarchivo se preparan antes de escribir y se restauran si falla una escritura. JavaFix resuelve acciones diferidas `codeAction/resolve` y ejecuta quick fixes JDTLS habilitados que terminan en un `WorkspaceEdit`, además de reparaciones propias explícitamente verificadas en `providerActions`. No ejecuta commands ni refactorizaciones JDTLS interactivas; las reparaciones JavaFix con parámetros se validan y generan localmente antes de crear la edición. El único vínculo PMD→JDTLS habilitado y verificado con fixture antes/después es `PMD/CloseResource`. `PMD/UnnecessaryLocalBeforeReturn` usa la reescritura AST propia y restringida descrita arriba. Después de aplicar, la respuesta incluye `postAnalysis` y `diagnosticChanges.resolved`, `.persistent` y `.new`. `diagnosticChanges.complete` es `false` si el análisis inicial o el posterior quedó incompleto. La identidad compara ruta, proveedor, código/regla y mensaje (no el rango) para tolerar desplazamientos de línea; hallazgos repetidos se comparan como multiconjunto.
+Sin `--apply` no se modifica ningún archivo; la respuesta muestra el contenido propuesto. La aplicación vuelve a analizar y regenerar las acciones, por lo que rechaza IDs que ya no existen; también valida que todos los destinos pertenezcan al proyecto y que los rangos no se solapen. Las ediciones multiarchivo se preparan antes de escribir y se restauran si falla una escritura. JavaFix resuelve acciones diferidas `codeAction/resolve` y ejecuta quick fixes JDTLS habilitados que terminan en un `WorkspaceEdit`, además de reparaciones propias explícitamente verificadas en `providerActions`. No ejecuta commands ni refactorizaciones JDTLS interactivas; las reparaciones JavaFix con parámetros se validan y generan localmente antes de crear la edición. Las asociaciones PMD→JDTLS verificadas con fixtures incluyen `PMD/CloseResource` y la eliminación del import no utilizado correspondiente. `PMD/UnnecessaryLocalBeforeReturn` usa la reescritura AST propia y restringida descrita arriba. Después de aplicar, la respuesta incluye `postAnalysis` y `diagnosticChanges.resolved`, `.persistent` y `.new`. `diagnosticChanges.complete` es `false` si el análisis inicial o el posterior quedó incompleto. La identidad compara ruta, proveedor, código/regla y mensaje (no el rango) para tolerar desplazamientos de línea; hallazgos repetidos se comparan como multiconjunto.
 
 JavaFix procesa fuentes como UTF-8 y rechaza bytes UTF-8 inválidos antes de aplicar cambios. Las ediciones conservan el BOM UTF-8 y los finales de línea existentes fuera del rango editado; se preservan permisos POSIX cuando el sistema de archivos los expone. La escritura temporal revalida el contenido justo antes de cada reemplazo y evita restaurar encima de cambios externos detectados durante rollback, pero no puede garantizar atomicidad conjunta de varios archivos ni excluir carreras de escritores que no respeten bloqueos.
 
 La cancelación cooperativa se solicita creando un archivo todavía inexistente indicado por `--cancel-file`; JavaFix lo comprueba entre peticiones LSP y pasos de escritura. Ejecuta el comando en un terminal:
 
 ```sh
-java -jar target/javafix-0.2.0.jar analyze --project /ruta/proyecto --cancel-file /tmp/javafix.cancel
+java -jar target/javafix-0.3.0.jar analyze --project /ruta/proyecto --cancel-file /tmp/javafix.cancel
 ```
 
 Desde otro terminal, solicita cancelación con `touch /tmp/javafix.cancel`. Si se cancela durante una aplicación multifichero, JavaFix revierte sus escrituras completadas cuando los bytes siguen siendo los escritos por JavaFix; conserva cambios externos detectados. Después de confirmar la transacción de escritura, completa el reanálisis para devolver un resultado no ambiguo. La cancelación no elimina la ventana de carrera TOCTOU con escritores externos; revisa la vista previa y conserva control de versiones o una copia de seguridad.
@@ -145,7 +145,7 @@ La inspección y fixture headless de JDTLS 1.61.0 confirman que `java/getRefacto
 
 JDTLS 1.61.0 no ofrece `refactor.inline` para el fixture probado. Para `PMD/UnnecessaryLocalBeforeReturn`, JavaFix dispone ahora de una reescritura AST deliberadamente restringida: solo elimina una variable inicializada, con un único uso como expresión del `return` inmediatamente siguiente, y conserva la conversión de tipo con un cast explícito. Rechaza `var`, anotaciones, comentarios en el rango, declaraciones con varias variables, usos adicionales y casos no inequívocos.
 
-**Reparaciones verificadas actualmente: cinco familias.** (1) Imports no utilizados (`UnusedImport` → Remove unused import). (2) Fugas de recursos: JDTLS `UnclosedCloseable` y PMD `CloseResource` usan la reparación JDTLS try-with-resources. (3) `PMD/UnnecessaryLocalBeforeReturn` usa la reescritura AST restringida descrita arriba. (4) `PMD/AvoidDuplicateLiterals` usa Extract Constant parametrizado para cadenas repetidas en una clase. (5) `PMD/LambdaCanBeMethodReference` admite solo llamadas estáticas seguras y con bindings verificados; las lambdas con receptor de instancia siguen siendo solo diagnósticos. Ninguna otra regla PMD se cuenta como reparable de extremo a extremo.
+**Además de esas cinco familias, se verificaron once subconjuntos de reparaciones PMD:** `ControlStatementBraces`, `CollapsibleIfStatements`, `UseStandardCharsets`, `UnnecessaryImport`, `UnusedLocalVariable`, `VariableCanBeInlined`, `UseDiamondOperator`, `UseCollectionIsEmpty`, `UnconditionalIfStatement`, `IdenticalConditionalBranches` y `UnusedAssignment`. Son transformaciones deliberadamente acotadas; los casos que no cumplen sus precondiciones siguen siendo diagnósticos sin reparación automática. Consulta el [registro de evidencia](docs/plans/verified-warning-repairs.md) para ver los límites de cada caso. Las lambdas con receptor de instancia siguen siendo solo diagnósticos.
 
 Extract Method es una refactorización explícita adicional, no un arreglo automático del diagnóstico PMD: el usuario elige tanto el rango como el nombre en el plan.
 
@@ -173,7 +173,7 @@ El ruleset verificado activa:
 `PMD/UseTryWithResources` es diagnóstico únicamente: los fixtures con cierre manual en `finally` (incluido `finally` con lógica adicional) no reciben una edición JDTLS verificable y no anuncian reparación automática. No se reutiliza para esta regla la reparación de fugas `PMD/CloseResource`.
 - Excepciones: `AvoidPrintStackTrace`, `AvoidCatchingGenericException`, `PreserveStackTrace`, `EmptyCatchBlock`, `AvoidThrowingNullPointerException`, `AvoidThrowingRawExceptionTypes`, `SignatureDeclareThrowsException`.
 - Null y lógica: `BrokenNullCheck`, `EqualsNull`, `ReturnEmptyCollectionRatherThanNull`, `UnusedReturnValue`, `UselessPureMethodCall`, `AssignmentInOperand`.
-- Control y complejidad: `SwitchStmtsShouldHaveDefault`, `AvoidDeeplyNestedIfStmts`, `CognitiveComplexity`, `CyclomaticComplexity`, `ControlStatementBraces`.
+- Control y complejidad: `SwitchStmtsShouldHaveDefault`, `AvoidDeeplyNestedIfStmts`, `CognitiveComplexity`, `CyclomaticComplexity`, `ControlStatementBraces`, `CollapsibleIfStatements`, `UnconditionalIfStatement`, `IdenticalConditionalBranches`.
 - API/estilo/rendimiento: `UseCollectionIsEmpty`, `UseStandardCharsets`, `UnnecessaryImport`, `UnnecessaryLocalBeforeReturn`, `LambdaCanBeMethodReference`, `UseDiamondOperator`, `VariableCanBeInlined`, `ClassNamingConventions`, `FieldNamingConventions`, `FormalParameterNamingConventions`, `LocalVariableNamingConventions`, `MethodNamingConventions`, `SystemPrintln`, `AvoidInstantiatingObjectsInLoops`, `InefficientStringBuffering`, `UseStringBufferForStringAppends`, `UseUtilityClass`.
 - Seguridad/concurrencia/tests: `HardCodedCryptoKey`, `InsecureCryptoIv`, `DoubleCheckedLocking`, `JUnitTestsShouldIncludeAssert`.
 
@@ -189,8 +189,8 @@ Los errores de argumentos, importación, inicio del servidor y timeout de petici
 - `acme/gradle`: proyecto Gradle con fuentes deliberadamente problemáticas.
 
 ```sh
-java -jar target/javafix-0.2.0.jar analyze --project acme/maven/pom.xml
-java -jar target/javafix-0.2.0.jar analyze --project acme/gradle/build.gradle
+java -jar target/javafix-0.3.0.jar analyze --project acme/maven/pom.xml
+java -jar target/javafix-0.3.0.jar analyze --project acme/gradle/build.gradle
 ```
 
 La primera compilación necesita descargar JDTLS desde Eclipse. En la primera ejecución, JavaFix extrae el servidor a `~/.cache/javafix/` y crea un workspace temporal.
@@ -199,7 +199,7 @@ La primera compilación necesita descargar JDTLS desde Eclipse. En la primera ej
 
 ## Publicar en GitHub Packages
 
-Las coordenadas Maven son `io.github.krandalf75:javafix:0.2.0`. Configura en `~/.m2/settings.xml` un servidor con id `github` y credenciales de GitHub Packages; después ejecuta:
+Las coordenadas Maven son `io.github.krandalf75:javafix:0.3.0`. Configura en `~/.m2/settings.xml` un servidor con id `github` y credenciales de GitHub Packages; después ejecuta:
 
 ```sh
 mvn deploy
@@ -207,7 +207,7 @@ mvn deploy
 
 No guardes tokens en el repositorio.
 
-GitHub Actions publica automáticamente al enviar un tag `v*`, siempre que el tag coincida exactamente con la versión del POM (por ejemplo, `v0.2.0`). El workflow `.github/workflows/publish.yml` ejecuta `clean deploy` con `GITHUB_TOKEN` y permiso `packages: write`, y crea una GitHub Release con el JAR ejecutable (versionado y como `javafix.jar`), el archivo de la skill y `SHA256SUMS`.
+GitHub Actions publica automáticamente al enviar un tag `v*`, siempre que el tag coincida exactamente con la versión del POM (por ejemplo, `v0.3.0`). El workflow `.github/workflows/publish.yml` ejecuta `clean deploy` con `GITHUB_TOKEN` y permiso `packages: write`, y crea una GitHub Release con el JAR ejecutable (versionado y como `javafix.jar`), el archivo de la skill y `SHA256SUMS`.
 
 ### Consumir como dependencia Maven
 
@@ -238,7 +238,7 @@ El registry Maven de GitHub exige autenticación para descargar paquetes incluso
   <dependency>
     <groupId>io.github.krandalf75</groupId>
     <artifactId>javafix</artifactId>
-    <version>0.2.0</version>
+    <version>0.3.0</version>
   </dependency>
 </dependencies>
 ```

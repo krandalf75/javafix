@@ -44,6 +44,13 @@ class JdtlsIntegrationTest {
         assertTrue(warning.path("resolution").path("automaticFixAvailable").asBoolean());
         assertTrue(warning.path("resolution").path("jdtlsActions").findValuesAsText("title")
             .contains("Remove unused import"));
+        JsonNode pmdImport = findRule(result, "PMD/UnnecessaryImport");
+        assertTrue(pmdImport.path("resolution").path("automaticFixAvailable").asBoolean(),
+            pmdImport.toPrettyString());
+        assertTrue(pmdImport.path("resolution").path("jdtlsActions").findValuesAsText("title")
+            .contains("Remove all unused imports"), pmdImport.toPrettyString());
+        assertEquals(findAction(warning, "Remove all unused imports").path("repairId").asText(),
+            findAction(pmdImport, "Remove all unused imports").path("repairId").asText());
         JsonNode suppression = findAction(warning, "SuppressWarnings");
         assertTrue(suppression.path("suppressesWarning").asBoolean());
         assertFalse(suppression.path("fixesDiagnostic").asBoolean());

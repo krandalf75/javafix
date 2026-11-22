@@ -1,0 +1,10 @@
+# Package 2 — `PMD/CollapsibleIfStatements`
+
+- **Candidate:** base `c1f3347f5603122cdaf8294a73fc34fc979786cd` plus the current uncommitted patch.
+- **Environment:** macOS; Temurin Java 25.0.3; Maven 3.10.1; PMD 7.29.0; JDTLS 1.61.0.
+- **Keep-awake:** tracked PID 76060 (`caffeinate -dimsu`) was not running at final process check; no live process remained to stop.
+- **Supported shape:** reported nested braced `if`, no `else`, no intervening statements/comments/patterns; short-circuit order and inner block scope retained.
+- **Evidence:** `VerifiedSimpleRepairsTest#collapsesReportedNestedIfWithShortCircuitingAndPreservesInnerBlock` exercises short-circuit order and retained inner block scope, and rejects an outer `else`. `PmdSingleLineControlRepairIntegrationTest#previewsAndAppliesReportedCollapsibleIfAndPreservesShortCircuitOutput` reproducibly observes the PMD finding, previews/applies the repair, and compiles/runs before and after with `--release 8` (both output `2:1`).
+- **Baseline-red / candidate-green:** Both packaged analyses report `PMD/CollapsibleIfStatements`. Baseline commit `c1f3347f5603122cdaf8294a73fc34fc979786cd` has no provider action; candidate offers action `fd1f1892a3a4dc3f0a05f5960b193ea5cd67817d961c1e1cd25afe2710a48a69`. Baseline JSON: `/private/var/folders/tx/4j5_b0rs5416t1ptw8x_bhjw0000gn/T/opencode/javafix-package3-baseline/target/collapse-baseline-analysis.json`; candidate: `target/collapse-candidate-analysis.json`.
+- **Packaged CLI preview/apply:** Preview is non-writing; apply with `--expect-preview` matched reviewed content/hash and post-analysis completed with zero errors and the target warning removed. JSON retained at `target/collapse-candidate-{analysis,cli-preview,cli-applied}.json`; before/after SHA-256: `33543712b703908154b40d43029ff424816655db5992d2fbf8c1c384a49e9dfb` / `c619ba950703da66b3e72abae70b5be8bee422bc9ae9bc1715774b309f59a8f3`.
+- **Full verification:** `mvn verify` after adding the reproducible integration test — 100 tests, 0 failures/errors/skips. **Independent review:** APPROVED; reviewer confirmed short-circuit order, block scope, and routing. **Package status:** `APPROVED`.

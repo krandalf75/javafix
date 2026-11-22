@@ -5,7 +5,7 @@
   <modelVersion>4.0.0</modelVersion>
   <groupId>io.github.krandalf75</groupId>
   <artifactId>javafix</artifactId>
-  <version>0.2.0</version>
+  <version>0.3.0</version>
   <name>javafix</name>
   <properties>
     <maven.compiler.release>25</maven.compiler.release>
